@@ -3,7 +3,7 @@ name: job-radar-pipeline
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"   # hourly (repo is PUBLIC = unlimited Actions minutes; restored from 2h)
+    - cron: "0 * * * *"   # hourly (repo is PUBLIC = unlimited Actions minutes; restored from 2h (tech))
 
 jobs:
   pipeline:
