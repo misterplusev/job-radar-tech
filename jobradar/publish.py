@@ -206,7 +206,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> None:
         return
     for idx in range(0, len(recent), CHUNK_SIZE):
         chunk = recent[idx : idx + CHUNK_SIZE]
-        payload = {"content": f"New robotics jobs discovered: {len(chunk)}",
+        payload = {"content": f"New tech jobs discovered: {len(chunk)}",
                    "embeds": [_embed(j) for j in chunk]}
         if DRY_RUN:
             print(f"[DRY-RUN] Chunk {idx // CHUNK_SIZE + 1}: {json.dumps(payload, indent=2)[:400]}")
@@ -221,7 +221,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> None:
             r.raise_for_status()
             break
         time.sleep(0.5)
-    print(f"[DISCORD] Posted {len(recent)} new robotics jobs")
+    print(f"[DISCORD] Posted {len(recent)} new tech jobs")
 
 
 def notify_failure(error_message: str) -> None:
