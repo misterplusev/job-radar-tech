@@ -4,7 +4,7 @@ Own implementation for the robotics module (independent of every other scraper
 module). Behavior contract:
 
   scrape  ->  group by company
-          ->  fetch existing robotics_jobs urls (paginated)
+          ->  fetch existing tech_jobs urls (paginated)
           ->  upsert new/seen rows (on_conflict=company,url, batched, retried)
           ->  deactivate urls that vanished from the provider (closed_at fallback)
           ->  Discord-announce NEW jobs posted within POSTED_DAYS_MAX days
@@ -12,7 +12,7 @@ module). Behavior contract:
           ->  failure alerts to the same webhook
 
 Tables (this module ONLY, robotics namespaced):
-  robotics_jobs             postings
+  tech_jobs             postings
   robotics_job_scrape_runs  per-provider telemetry
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ DISCORD_WEBHOOK_JOBS = os.environ.get("DISCORD_WEBHOOK_JOBS", "").strip()
 DRY_RUN = False
 
 BASE_URL = "https://api.github.com"  # unused placeholder to keep module import-safe
-TABLE_JOBS = "robotics_jobs"
+TABLE_JOBS = "tech_jobs"
 TABLE_RUNS = "robotics_job_scrape_runs"
 BATCH_SIZE = 100
 CHUNK_SIZE = 5
@@ -245,7 +245,7 @@ def notify_failure(error_message: str) -> None:
 # orchestration
 # --------------------------------------------------------------------------- #
 def serialize(job) -> dict:
-    """Job contract row -> robotics_jobs row (source_payload keeps raw/clean).
+    """Job contract row -> tech_jobs row (source_payload keeps raw/clean).
 
     Empty description fields are OMITTED so the merge-upsert keeps existing
     descriptions instead of wiping them (content-less boards, e.g. greenhouse

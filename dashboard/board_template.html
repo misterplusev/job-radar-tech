@@ -1,6 +1,6 @@
 <!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Job Radar — Robotics Jobs Monitor</title><style>
+<title>Job Radar — Tech Jobs Monitor</title><style>
 :root{color-scheme:dark}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;background:#0d1117;color:#e6edf3}
 header{padding:16px 20px;border-bottom:1px solid #30363d;background:#0d1117}
@@ -31,7 +31,7 @@ a:hover{text-decoration:underline}
 @keyframes sb-spin{to{transform:rotate(360deg)}}
 @keyframes sb-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
 </style></head><body>
-<header><div class=logo-wrap><span class=logo-brand><span class=alpha>α</span>bet</span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Robotics Jobs Monitor</h1></div><div class=muted>live from the persistent database (robotics_jobs) — refreshed on every load</div></header>
+<header><div class=logo-wrap><span class=logo-brand><span class=alpha>α</span>bet</span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
 <div class=controls>
  <input id=q placeholder="search title / company / location" size=32>
  <select id=co><option value="">all companies</option></select>
@@ -57,7 +57,7 @@ function slugify(name){return (""+(name||"")).toLowerCase().replace(/ /g,"-").re
 async function load(){
  let rows=[], offset=0;
  while(true){
-  const r=await fetch(`${SB_URL}/rest/v1/robotics_jobs?select=company,title,url,location,ats,posted_at,is_active,scraped_at&order=posted_at.desc.nullslast,scraped_at.desc&limit=1000&offset=${offset}`,
+  const r=await fetch(`${SB_URL}/rest/v1/tech_jobs?select=company,title,url,location,ats,posted_at,is_active,scraped_at&order=posted_at.desc.nullslast,scraped_at.desc&limit=1000&offset=${offset}`,
    {headers:{apikey:SB_ANON,Authorization:`Bearer ${SB_ANON}`,Range:`${offset}-${offset+999}`}});
   if(!r.ok){loadwrap.style.display="none";cnt.style.display="block";cnt.textContent=`load failed: ${r.status}`;return}
   const page=await r.json();
