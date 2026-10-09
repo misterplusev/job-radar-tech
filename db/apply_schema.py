@@ -1,10 +1,10 @@
-"""Apply db/schema_robotics.sql to the robotics Supabase project via the Management API.
+"""Apply db/schema_tech.sql to the tech Supabase project via the Management API.
 
 Env:
   SUPABASE_ACCESS_TOKEN  personal access token (Management API)
   SUPABASE_PROJECT_REF   project ref (default read from env, no hand-typed literals)
 
-Idempotent: the schema file only creates-if-not-exists / replaces robotics_* objects.
+Idempotent: the schema file only creates-if-not-exists / replaces tech_* objects.
 """
 import os
 import sys
@@ -19,7 +19,7 @@ if not TOKEN or not REF:
     print("FATAL: SUPABASE_ACCESS_TOKEN and/or SUPABASE_PROJECT_REF not set", file=sys.stderr)
     sys.exit(1)
 
-SQL_PATH = Path(__file__).resolve().parent / "schema_robotics.sql"
+SQL_PATH = Path(__file__).resolve().parent / "schema_tech.sql"
 sql = SQL_PATH.read_text(encoding="utf-8")
 
 r = requests.post(
