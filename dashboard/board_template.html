@@ -89,7 +89,7 @@ async function toggleApplied(company,url,title){
  const key=akey(company,url);
  try{
   if(APPLIED.has(key)){
-   const f="company=eq."+encodeURIComponent('"'+company+'"')+"&job_url=eq."+encodeURIComponent('"'+url+'"');
+   const f="company=eq."+encodeURIComponent(company)+"&job_url=eq."+encodeURIComponent(url);
    const r=await fetch(SB_URL+"/rest/v1/applications?"+f,{method:"DELETE",headers:SBH});
    if(r.ok){APPLIED.delete(key);render()}
   }else{
