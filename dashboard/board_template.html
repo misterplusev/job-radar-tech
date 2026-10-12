@@ -9,9 +9,9 @@ h1{margin:0 0 4px;font-size:1.75rem;font-weight:600}
 .controls{display:flex;gap:10px;flex-wrap:wrap;padding:14px 20px;position:sticky;top:0;background:#0d1117;border-bottom:1px solid #21262d;z-index:5}
 input,select{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:.875rem}
 input:focus,select:focus{border-color:#58a6ff;outline:none}
-table{width:100%;border-collapse:collapse}
+table{width:100%;border-collapse:separate;border-spacing:0}
 td,th{padding:8px 12px;border-bottom:1px solid #21262d;text-align:left;vertical-align:middle}
-th{position:sticky;top:61px;background:#161b22;color:#8b949e;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;z-index:2}
+th{position:sticky;top:var(--ctrl-h,61px);background:#161b22;color:#8b949e;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;z-index:2;box-shadow:0 1px 0 #30363d}
 a{color:#58a6ff;text-decoration:none}
 a:hover{text-decoration:underline}
 .logo{width:22px;height:22px;border-radius:6px;background:#161b22;border:1px solid #30363d;object-fit:contain;padding:1px;vertical-align:middle;margin-right:2px}
@@ -71,6 +71,7 @@ function slugify(name){return (""+(name||"")).toLowerCase().replace(/ /g,"-").re
 function esc(s){return (""+(s||"")).replace(/&/g,"\x26amp;").replace(/</g,"\x26lt;").replace(/>/g,"\x26gt;").replace(/"/g,"\x26quot;").replace(/'/g,"\x26#39;")}
 const PALETTE=["#58a6ff","#3fb950","#f778ba","#d29922","#a371f7","#39c5cf","#ff7b72","#7ee787","#f0883e","#79c0ff","#db61a2","#56d364","#e3b341","#ffa657"];
 function colorOf(name){let h=0;for(const ch of (""+name))h=(h*31+ch.charCodeAt(0))>>>0;return PALETTE[h%PALETTE.length]}
+function setCtrlH(){document.documentElement.style.setProperty("--ctrl-h",(document.querySelector(".controls").offsetHeight+1)+"px")}
 const akey=(c,u)=>c+"\u0001"+u;
 const SBH={apikey:SB_ANON,Authorization:"Bearer "+SB_ANON};
 async function loadApplied(){
@@ -119,6 +120,7 @@ async function load(){
  DATA.forEach(d=>{if(d.company)counts[d.company]=(counts[d.company]||0)+(d.is_active?1:0)});
  const companies=Object.keys(counts).sort((a,b)=>a.localeCompare(b));
  pills.innerHTML="<button class='co-pill all' data-c=''>All</button>"+companies.map(c=>"<button class='co-pill' data-c=\""+esc(c)+"\"><img src='logos/"+slugify(c)+".png' onerror=\"this.style.display='none'\"><span>"+esc(c)+"</span><span class='cnt'>"+counts[c]+"</span></button>").join("");
+ setCtrlH();
  const sources=[...new Set(DATA.map(d=>d.ats).filter(Boolean))].sort();
  src.innerHTML="<option value=''>all sources</option>"+sources.map(s=>"<option>"+esc(s)+"</option>").join("");
  const locations=[...new Set(DATA.map(d=>(d.location||"").trim()).filter(Boolean))].sort();
@@ -169,5 +171,6 @@ tb.addEventListener("click",e=>{
 });
 document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(k===sortK)asc=!asc;else{sortK=k;asc=false}render()});
 [q,loc,src,st,rem].forEach(el=>el.addEventListener("input",render));
+window.addEventListener("resize",setCtrlH);
 load();
 </script></body></html>
