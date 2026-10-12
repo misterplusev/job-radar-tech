@@ -36,6 +36,12 @@ BATCH_SIZE = 100
 CHUNK_SIZE = 5
 POSTED_DAYS_MAX = 14
 PROVIDER_TIMEOUT = 120
+BOARD_LOGOS_BASE = "https://misterplusev.github.io/jobradar-tech-board/logos"
+
+
+def _logo_url(company: Optional[str]) -> Optional[str]:
+    slug = ((company or "").strip().lower().replace(" ", "-").replace(".", "-"))
+    return f"{BOARD_LOGOS_BASE}/{slug}.png" if slug else None
 
 
 def now_iso() -> str:
@@ -179,20 +185,23 @@ def _embed(job: dict) -> dict:
     if len(description) > 350:
         description = description[:347] + "..."
     embed = {
-        "title": (job.get("title") or "New robotics job posting")[:256],
+        "title": (job.get("title") or "New tech job posting")[:256],
         "url": (job.get("url") or "")[:2048] or None,
-        "description": description or "New robotics job discovered.",
+        "description": description or "New tech job discovered.",
         "color": 0x34D399,
         "fields": [
             {"name": "Company", "value": (job.get("company") or "Unknown")[:256], "inline": True},
             {"name": "Location", "value": (job.get("location") or "Unknown")[:1024], "inline": True},
         ],
-        "footer": {"text": "ABET Robotics Jobs Monitor"},
+        "footer": {"text": "ABET Tech Jobs Monitor"},
         "timestamp": job.get("posted_at") or job.get("scraped_at") or now_iso(),
     }
     ats = job.get("ats")
     if ats:
         embed["fields"].insert(0, {"name": "Source", "value": str(ats)[:256], "inline": True})
+    thumb = _logo_url(job.get("company"))
+    if thumb:
+        embed["thumbnail"] = {"url": thumb}
     return embed
 
 
@@ -228,15 +237,15 @@ def notify_failure(error_message: str) -> None:
     if not DISCORD_WEBHOOK_JOBS:
         return
     embed = {
-        "title": "Robotics Scrape Failed",
+        "title": "Tech Scrape Failed",
         "description": f"```\n{error_message[:1500]}\n```",
         "color": 0xFF0055,
-        "footer": {"text": "ABET Robotics Jobs Monitor"},
+        "footer": {"text": "ABET Tech Jobs Monitor"},
         "timestamp": now_iso(),
     }
     try:
         requests.post(DISCORD_WEBHOOK_JOBS,
-                      json={"content": "@here Robotics scrape failure", "embeds": [embed]}, timeout=30)
+                      json={"content": "@here Tech scrape failure", "embeds": [embed]}, timeout=30)
     except Exception:  # noqa: BLE001
         pass
 
