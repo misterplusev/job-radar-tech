@@ -3,7 +3,7 @@ name: job-radar-pipeline
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"   # hourly (repo is PUBLIC = unlimited Actions minutes; restored from 2h (tech))
+    - cron: "37 * * * *"  # hourly at :37 (offset avoids GitHub's top-of-hour scheduler congestion; PUBLIC repo = unlimited minutes)
 
 jobs:
   pipeline:
@@ -22,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Apply robotics schema (idempotent)
+      - name: Apply tech schema (idempotent)
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
