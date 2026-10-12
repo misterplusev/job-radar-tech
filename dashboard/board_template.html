@@ -172,5 +172,6 @@ tb.addEventListener("click",e=>{
 document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(k===sortK)asc=!asc;else{sortK=k;asc=false}render()});
 [q,loc,src,st,rem].forEach(el=>el.addEventListener("input",render));
 window.addEventListener("resize",setCtrlH);
+new ResizeObserver(setCtrlH).observe(document.querySelector(".controls"));
 load();
 </script></body></html>
