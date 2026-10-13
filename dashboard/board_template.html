@@ -38,7 +38,8 @@ a:hover{text-decoration:underline}
 .abet-chip-loader{display:flex;flex-direction:column;align-items:center;gap:16px;padding:38px 0}
 @keyframes abet-chip-flip{0%{transform:rotateY(0deg) translateY(0)}45%{transform:rotateY(540deg) translateY(-10px)}70%{transform:rotateY(720deg) translateY(0)}78%{transform:rotateY(720deg) translateY(-3px)}86%{transform:rotateY(720deg) translateY(0)}100%{transform:rotateY(720deg) translateY(0)}}
 @media (prefers-reduced-motion:reduce){.abet-chip-spinner{animation:none !important}}
-.pills{flex-basis:100%;min-width:0;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pills{flex-basis:100%;min-width:0;display:flex;flex-direction:column;flex-wrap:wrap;align-content:flex-start;align-items:flex-start;gap:6px;max-height:64px;overflow-x:auto;overflow-y:hidden;padding-bottom:2px}
+td:nth-child(2){white-space:nowrap}
 .co-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22;color:#c9d1d9;font-size:12px;cursor:pointer}
 .co-pill:hover{border-color:#58a6ff}
 .co-pill img{width:18px;height:18px;border-radius:4px;object-fit:contain;background:#0d1117}
@@ -50,7 +51,14 @@ a:hover{text-decoration:underline}
 .co-pill.off .mark{transform:rotate(-90deg)}
 .apply-btn{font-size:11px;padding:3px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22;color:#c9d1d9;cursor:pointer;white-space:nowrap}
 .apply-btn.on{color:#FFD600;border-color:rgba(255,214,0,.5)}
-@media(max-width:870px){body{min-width:870px}}
+@media(max-width:900px){
+body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+header,.controls,#status{flex:0 0 auto}
+.controls{position:static}
+.tblscroll{flex:1 1 auto;min-height:0;overflow:auto}
+table{min-width:860px}
+th{top:0}
+}
 </style></head><body>
 <header><div class=logo-wrap><span class=logo-brand><span class=logo-alpha>α</span><span class=logo-word>bet</span></span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><button class="co-pill sec" id=sec-head><span class=mark>▾</span></button><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
 <div class=controls>
@@ -70,7 +78,7 @@ a:hover{text-decoration:underline}
  <div class=abet-chip-loader role=status aria-live=polite><div class=abet-chip-perspective><div class=abet-chip-spinner><div class=abet-chip-face><span class=abet-chip-seg style="transform:rotate(0deg)"></span><span class=abet-chip-seg style="transform:rotate(45deg)"></span><span class=abet-chip-seg style="transform:rotate(90deg)"></span><span class=abet-chip-seg style="transform:rotate(135deg)"></span><span class=abet-chip-seg style="transform:rotate(180deg)"></span><span class=abet-chip-seg style="transform:rotate(225deg)"></span><span class=abet-chip-seg style="transform:rotate(270deg)"></span><span class=abet-chip-seg style="transform:rotate(315deg)"></span><span class=abet-chip-txt>α</span></div><div class="abet-chip-face abet-chip-back"><span class=abet-chip-seg style="transform:rotate(0deg)"></span><span class=abet-chip-seg style="transform:rotate(45deg)"></span><span class=abet-chip-seg style="transform:rotate(90deg)"></span><span class=abet-chip-seg style="transform:rotate(135deg)"></span><span class=abet-chip-seg style="transform:rotate(180deg)"></span><span class=abet-chip-seg style="transform:rotate(225deg)"></span><span class=abet-chip-seg style="transform:rotate(270deg)"></span><span class=abet-chip-seg style="transform:rotate(315deg)"></span><span class=abet-chip-txt>α</span></div></div></div></div>
  <div id=loadprogress class=muted>Loading jobs...</div>
 </div>
-<table id=tblwrap style=display:none><thead><tr><th data-k=title>Title</th><th data-k=company>Company</th><th data-k=location>Location</th><th data-k=ats>Source</th><th data-k=posted_at>Posted</th><th data-k=scraped_at>Status</th><th>Applied?</th></tr></thead><tbody id=tb></tbody></table>
+<div id=tblscroll class=tblscroll><table id=tblwrap style=display:none><thead><tr><th data-k=title>Title</th><th data-k=company>Company</th><th data-k=location>Location</th><th data-k=ats>Source</th><th data-k=posted_at>Posted</th><th data-k=scraped_at>Status</th><th>Applied?</th></tr></thead><tbody id=tb></tbody></table></div>
 <script>
 const SB_URL="__SB_URL__", SB_ANON="__SB_ANON__", POLL="hourly";
 let DATA=[], sortK="posted_at", asc=false, APPLIED=new Set(), COMP=new Set();
@@ -166,7 +174,7 @@ function render(){
   "<td><button class='apply-btn"+(on?" on":"")+"' data-c=\""+esc(d.company)+"\" data-u=\""+esc(d.url)+"\" data-t=\""+esc(d.title)+"\">"+(on?"✓ applied":"mark applied")+"</button></td>\n</tr>"}).join("");
 }
 function secToggle(btnId,secSel){const b=document.getElementById(btnId),s=document.querySelector(secSel);b.addEventListener("click",()=>{const hide=s.style.display!=="none";s.style.display=hide?"none":"";b.classList.toggle("off",hide)})}
-secToggle("sec-head","header .muted");secToggle("sec-filters","#filters");secToggle("sec-pills","#pills");
+secToggle("sec-head","header .muted");secToggle("sec-filters","#filters");secToggle("sec-pills","#pills");pills.addEventListener("wheel",e=>{if(e.deltaY){pills.scrollLeft+=e.deltaY;e.preventDefault()}},{passive:false});
 pills.addEventListener("click",e=>{
  const b=e.target.closest(".co-pill"); if(!b)return;
  const c=b.dataset.c;
