@@ -3,7 +3,8 @@
 <title>Job Radar — Tech Jobs Monitor</title><style>
 :root{color-scheme:dark}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;background:#0d1117;color:#e6edf3}
-header{padding:16px 20px;border-bottom:1px solid #30363d;background:#0d1117}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid #30363d;background:#0d1117}
+header .muted{flex-basis:100%}
 h1{margin:0 0 4px;font-size:1.75rem;font-weight:600}
 .muted{color:#8b949e;font-size:.875rem}
 .controls{display:flex;gap:10px;flex-wrap:wrap;padding:14px 20px;position:sticky;top:0;background:#0d1117;border-bottom:1px solid #21262d;z-index:5}
@@ -23,7 +24,7 @@ a:hover{text-decoration:underline}
 .pill.applied{color:#FFD600;border-color:rgba(255,214,0,.45)}
 #status{font-size:12px;color:#8b949e;padding:6px 20px}
 .alpha{color:#FFD600;font-weight:bold;font-style:italic;text-shadow:0 0 10px rgba(255,214,0,.35)}
-.logo-wrap{display:flex;align-items:center;gap:10px}
+.logo-wrap{display:flex;align-items:center;gap:10px;flex:1}
 .logo-brand{font-size:1.5rem;font-weight:bold;color:#fff}
 .loading-wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:38px 20px}
 .abet-chip-perspective{perspective:620px;width:76px;height:76px}
@@ -41,16 +42,23 @@ a:hover{text-decoration:underline}
 .co-pill img{width:18px;height:18px;border-radius:4px;object-fit:contain;background:#0d1117}
 .co-pill .cnt{color:#8b949e;font-size:11px}
 .co-pill.all{border-color:rgba(255,214,0,.45);color:#FFD600}
+.frow{flex-basis:100%;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.co-pill .mark{display:inline-block;width:11px;transition:transform .15s}
+.co-pill.off .mark{transform:rotate(-90deg)}
 .apply-btn{font-size:11px;padding:3px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22;color:#c9d1d9;cursor:pointer;white-space:nowrap}
 .apply-btn.on{color:#FFD600;border-color:rgba(255,214,0,.5)}
 </style></head><body>
-<header><div class=logo-wrap><span class=logo-brand><span class=alpha>α</span>bet</span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
+<header><div class=logo-wrap><span class=logo-brand><span class=alpha>α</span>bet</span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><button class="co-pill sec" id=sec-head><span class=mark>▾</span></button><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
 <div class=controls>
+ <button class="co-pill sec" id=sec-filters><span class=mark>▾</span> filters</button>
+ <button class="co-pill sec" id=sec-pills><span class=mark>▾</span> companies</button>
+ <div id=filters class=frow>
  <input id=q placeholder="search title / company / location" size=32>
  <select id=loc><option value="">all locations</option></select>
  <select id=src><option value="">all sources</option></select>
  <select id=st><option value="">active + closed</option><option value="1">active only</option><option value="0">closed only</option><option value="applied">applied only</option></select>
  <label><input type=checkbox id=rem> remote only</label>
+ </div>
  <div id=pills class=pills></div>
 </div>
 <div id=status style=display:none></div>
@@ -121,6 +129,7 @@ async function load(){
  const companies=Object.keys(counts).sort((a,b)=>a.localeCompare(b));
  pills.innerHTML="<button class='co-pill all' data-c=''>All</button>"+companies.map(c=>"<button class='co-pill' data-c=\""+esc(c)+"\"><img src='logos/"+slugify(c)+".png' onerror=\"this.style.display='none'\"><span>"+esc(c)+"</span><span class='cnt'>"+counts[c]+"</span></button>").join("");
  setCtrlH();
+ document.getElementById("sec-pills").innerHTML="<span class=mark>▾</span> companies <span class=cnt>"+companies.length+"</span>";
  const sources=[...new Set(DATA.map(d=>d.ats).filter(Boolean))].sort();
  src.innerHTML="<option value=''>all sources</option>"+sources.map(s=>"<option>"+esc(s)+"</option>").join("");
  const locations=[...new Set(DATA.map(d=>(d.location||"").trim()).filter(Boolean))].sort();
@@ -152,6 +161,8 @@ function render(){
   "<td><span class='pill "+(d.is_active?"":"closed")+"'>"+(d.is_active?"active":"closed")+"</span>"+(on?" <span class='pill applied'>applied</span>":"")+"</td>"+
   "<td><button class='apply-btn"+(on?" on":"")+"' data-c=\""+esc(d.company)+"\" data-u=\""+esc(d.url)+"\" data-t=\""+esc(d.title)+"\">"+(on?"✓ applied":"mark applied")+"</button></td>\n</tr>"}).join("");
 }
+function secToggle(btnId,secSel){const b=document.getElementById(btnId),s=document.querySelector(secSel);b.addEventListener("click",()=>{const hide=s.style.display!=="none";s.style.display=hide?"none":"";b.classList.toggle("off",hide)})}
+secToggle("sec-head","header .muted");secToggle("sec-filters","#filters");secToggle("sec-pills","#pills");
 pills.addEventListener("click",e=>{
  const b=e.target.closest(".co-pill"); if(!b)return;
  const c=b.dataset.c;
