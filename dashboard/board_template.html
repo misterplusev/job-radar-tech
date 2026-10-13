@@ -23,9 +23,11 @@ a:hover{text-decoration:underline}
 .pill.date{color:#c9d1d9}
 .pill.applied{color:#FFD600;border-color:rgba(255,214,0,.45)}
 #status{font-size:12px;color:#8b949e;padding:6px 20px}
-.alpha{color:#FFD600;font-weight:bold;font-style:italic;text-shadow:0 0 10px rgba(255,214,0,.35)}
+.logo-brand{display:inline-flex;align-items:center;gap:3px;line-height:1}
+.logo-alpha{font-family:'Times New Roman',serif;font-size:30px;font-weight:700;color:#FDB515;text-shadow:0 0 18px rgba(253,181,21,.28);line-height:.88;transform:translateY(-1px)}
+.logo-word{font-size:22px;font-weight:900;letter-spacing:.08em;color:#F0F4FA;line-height:.9}
 .logo-wrap{display:flex;align-items:center;gap:10px;flex:1}
-.logo-brand{font-size:1.5rem;font-weight:bold;color:#fff}
+
 .loading-wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:38px 20px}
 .abet-chip-perspective{perspective:620px;width:76px;height:76px}
 .abet-chip-spinner{width:100%;height:100%;position:relative;transform-style:preserve-3d;animation:abet-chip-flip 2.4s cubic-bezier(.45,.05,.35,1) infinite}
@@ -48,9 +50,9 @@ a:hover{text-decoration:underline}
 .co-pill.off .mark{transform:rotate(-90deg)}
 .apply-btn{font-size:11px;padding:3px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22;color:#c9d1d9;cursor:pointer}
 .apply-btn.on{color:#FFD600;border-color:rgba(255,214,0,.5)}
-@media(max-width:900px){table{table-layout:fixed}td,th{overflow-wrap:anywhere}}
+@media(max-width:900px){table{table-layout:fixed}td,th{overflow-wrap:anywhere}th:nth-child(4),td:nth-child(4),th:nth-child(5),td:nth-child(5){display:none}th:nth-child(1){width:34%}th:nth-child(2){width:20%}th:nth-child(3){width:20%}th:nth-child(6){width:14%}th:nth-child(7){width:12%}}
 </style></head><body>
-<header><div class=logo-wrap><span class=logo-brand><span class=alpha>α</span>bet</span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><button class="co-pill sec" id=sec-head><span class=mark>▾</span></button><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
+<header><div class=logo-wrap><span class=logo-brand><span class=logo-alpha>α</span><span class=logo-word>bet</span></span><h1 style="margin:0;font-size:1.75rem;font-weight:600">Tech Jobs Monitor</h1></div><button class="co-pill sec" id=sec-head><span class=mark>▾</span></button><div class=muted>live from the persistent database (tech_jobs) — refreshed on every load</div></header>
 <div class=controls>
  <button class="co-pill sec" id=sec-filters><span class=mark>▾</span> filters</button>
  <button class="co-pill sec" id=sec-pills><span class=mark>▾</span> companies</button>
