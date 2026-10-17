@@ -11,9 +11,9 @@ module). Behavior contract:
               (5-embed chunks, 429-aware retries, 0.5s spacing)
           ->  failure alerts to the same webhook
 
-Tables (this module ONLY, robotics namespaced):
+Tables (this module ONLY, tech namespaced):
   tech_jobs             postings
-  robotics_job_scrape_runs  per-provider telemetry
+  tech_job_scrape_runs  per-provider telemetry
 """
 from __future__ import annotations
 
@@ -31,7 +31,12 @@ DRY_RUN = False
 
 BASE_URL = "https://api.github.com"  # unused placeholder to keep module import-safe
 TABLE_JOBS = "tech_jobs"
-TABLE_RUNS = "robotics_job_scrape_runs"
+# Must match db/schema_tech.sql. This was hardcoded to the robotics table, so
+# every tech receipt was written into public.robotics_job_scrape_runs and the
+# tech telemetry table stayed permanently empty (verified: 0 rows in prod).
+# NOTE: the table really is lowercase. Postgres folds unquoted identifiers, so
+# `create table public.Tech_job_scrape_runs` created `tech_job_scrape_runs`.
+TABLE_RUNS = "tech_job_scrape_runs"
 BATCH_SIZE = 100
 CHUNK_SIZE = 5
 POSTED_DAYS_MAX = 14

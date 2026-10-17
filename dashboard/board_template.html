@@ -98,7 +98,7 @@ async function loadApplied(){
  const set=new Set(); let off=0;
  try{
   while(true){
-   const r=await fetch(SB_URL+"/rest/v1/applications?select=company,job_url&limit=1000&offset="+off,{headers:SBH});
+   const r=await fetch(SB_URL+"/rest/v1/tech_applications?select=company,job_url&limit=1000&offset="+off,{headers:SBH});
    if(!r.ok)break;
    const pg=await r.json(); pg.forEach(a=>set.add(akey(a.company,a.job_url)));
    if(pg.length<1000)break; off+=1000;
@@ -111,10 +111,10 @@ async function toggleApplied(company,url,title){
  try{
   if(APPLIED.has(key)){
    const f="company=eq."+encodeURIComponent(company)+"&job_url=eq."+encodeURIComponent(url);
-   const r=await fetch(SB_URL+"/rest/v1/applications?"+f,{method:"DELETE",headers:SBH});
+   const r=await fetch(SB_URL+"/rest/v1/tech_applications?"+f,{method:"DELETE",headers:SBH});
    if(r.ok){APPLIED.delete(key);render()}
   }else{
-   const r=await fetch(SB_URL+"/rest/v1/applications",{method:"POST",headers:Object.assign({},SBH,{"Content-Type":"application/json",Prefer:"resolution=merge-duplicates"}),body:JSON.stringify([{company:company,job_url:url,job_title:title}])});
+   const r=await fetch(SB_URL+"/rest/v1/tech_applications",{method:"POST",headers:Object.assign({},SBH,{"Content-Type":"application/json",Prefer:"resolution=merge-duplicates"}),body:JSON.stringify([{company:company,job_url:url,job_title:title}])});
    if(r.ok){APPLIED.add(key);render()}
   }
  }catch(e){}

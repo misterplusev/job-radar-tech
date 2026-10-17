@@ -31,3 +31,8 @@ build/
 # os
 .DS_Store
 Thumbs.db
+
+# RULE 2 local backups (never publish)
+*_backup_*
+relevance_validation.json
+targets_audit.json

@@ -17,6 +17,12 @@ from .models import Job, JOB_COLUMNS, now_iso
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122 Safari/537.36"
 
+# The table the deployed module schema actually creates (see db/schema_tech.sql).
+# The legacy `jobs`/`job_scores` tables below belong to the v0.1 scorer design; they
+# do NOT exist in the module schema, so any Supabase query against them returns a
+# PostgREST error object instead of rows.
+MODULE_JOBS_TABLE = "tech_jobs"
+
 
 def get_storage(settings) -> "Storage":
     if settings.SUPABASE_URL and settings.SUPABASE_SERVICE_ROLE_KEY:
@@ -35,6 +41,7 @@ class Storage:
     def get_job(self, job_id: int) -> Optional[dict]: ...
     def upsert_application(self, app: dict) -> None: ...
     def recent_scored(self, limit: int = 50) -> List[dict]: ...
+    def recent_active_jobs(self, limit: int = 500) -> List[dict]: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -174,6 +181,15 @@ class SQLiteBackend(Storage):
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def recent_active_jobs(self, limit: int = 500) -> List[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "select company,title,location,url,source,posted_at,scraped_at,is_active "
+                "from jobs where is_active=1 order by scraped_at desc limit ?",
+                [limit],
+            ).fetchall()
+            return [dict(r) for r in rows]
+
 
 # --------------------------------------------------------------------------- #
 # Supabase (PostgREST)
@@ -256,6 +272,28 @@ class SupabaseBackend(Storage):
                       data=json.dumps([app]), timeout=60)
 
     def recent_scored(self, limit: int = 50) -> List[dict]:
-        return requests.get(
+        # Legacy v0.1 scorer path. `job_scores` does not exist in the deployed
+        # module schema, so this raises instead of handing back a PostgREST
+        # error dict that downstream code would iterate as if it were rows.
+        r = requests.get(
             f"{self.url}/rest/v1/job_scores?select=fit_score,archetype,rationale,jobs(company,title,location,url,source)"
-            f"&order=fit_score.desc&limit={limit}", headers=self._h(), timeout=60).json()
+            f"&order=fit_score.desc&limit={limit}", headers=self._h(), timeout=60)
+        r.raise_for_status()
+        rows = r.json()
+        if not isinstance(rows, list):
+            raise RuntimeError(f"recent_scored expected rows, got {type(rows).__name__}: {rows}")
+        return rows
+
+    def recent_active_jobs(self, limit: int = 500) -> List[dict]:
+        r = requests.get(
+            f"{self.url}/rest/v1/{MODULE_JOBS_TABLE}"
+            f"?select=company,title,location,url,ats,posted_at,scraped_at,is_active"
+            f"&is_active=eq.true&order=scraped_at.desc&limit={limit}",
+            headers=self._h(), timeout=60)
+        r.raise_for_status()
+        rows = r.json()
+        if not isinstance(rows, list):
+            raise RuntimeError(f"recent_active_jobs expected rows, got {type(rows).__name__}: {rows}")
+        for row in rows:
+            row["source"] = row.pop("ats", None)
+        return rows
