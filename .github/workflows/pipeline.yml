@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "37 * * * *"  # hourly at :37 (offset avoids GitHub's top-of-hour scheduler congestion; PUBLIC repo = unlimited minutes)
 
+concurrency:
+  group: job-radar-pipeline
+  cancel-in-progress: false
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
