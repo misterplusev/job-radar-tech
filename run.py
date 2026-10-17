@@ -32,7 +32,7 @@ def _run_id(slug: str) -> str:
 
 
 def _scrape_all() -> list:
-    """Scrape every provider with a per-provider hard timeout ( robotics module)."""
+    """Scrape every provider with a per-provider hard timeout ( tech module)."""
     import concurrent.futures
 
     providers = build_providers(settings.load_targets())
@@ -53,12 +53,12 @@ def _scrape_all() -> list:
 
 
 def _ingest_supabase() -> int:
-    """Prod path: scrape -> publish to robotics_* tables -> telemetry -> Discord."""
+    """Prod path: scrape -> publish to tech_* tables -> telemetry -> Discord."""
     from jobradar import publish
 
     url_base, key = publish.supabase_env()
     providers = build_providers(settings.load_targets())
-    print(f"[ingest] {len(providers)} providers | storage=supabase(robotics_*)")
+    print(f"[ingest] {len(providers)} providers | storage=supabase(tech_*)")
     all_jobs = []
     for p in providers:
         rid = _run_id(f"{p.source}:{p.provider_slug}")
@@ -81,7 +81,7 @@ def _ingest_supabase() -> int:
 
     print(f"[ingest] collected {len(all_jobs)} jobs")
     if not all_jobs:
-        raise RuntimeError("No robotics jobs scraped from any provider.")
+        raise RuntimeError("No tech jobs scraped from any provider.")
     publish.publish(all_jobs)
     return 0
 
@@ -158,13 +158,12 @@ def cmd_report(args) -> int:
 
 
 def cmd_render(args) -> int:
-    try:
-        from jobradar.dashboard import render_dashboard
-        path = render_dashboard(settings, get_storage(settings), args.out)
-        print(f"[render] dashboard -> {path}")
-    except Exception as e:  # noqa: BLE001
-        # the live board (jobradar-board) is the real dashboard; this artifact is dev-only
-        print(f"[render] skipped: {e}")
+    # Never swallow this. The render step used to catch every exception, print
+    # "[render] skipped" and exit 0, so a broken query looked like a green run
+    # while uploading no artifact — silently broken on every execution.
+    from jobradar.dashboard import render_dashboard
+    path = render_dashboard(settings, get_storage(settings), args.out)
+    print(f"[render] dashboard -> {path}")
     return 0
 
 

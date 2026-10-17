@@ -38,14 +38,15 @@ ALERT_MIN_SCORE = int(_get("ALERT_MIN_SCORE", "75") or 75)
 MATRIX_PATH = _get("MATRIX_PATH", str(ROOT / "config" / "skills_matrix.md"))
 GENERATED_DOCS_DIR = _get("GENERATED_DOCS_DIR", "D:/Job_Applications_MASTER/Generated")
 
-# candidate targeting (used by the prefilter)
+# candidate targeting (used by the prefilter — vestigial scorer path, not part of
+# the hourly `ingest` workflow; kept correct so it is not misleading if revived)
 TARGET_METROS = ["phoenix", "scottsdale", "tempe", "arizona", "az", "seattle",
-                 "san francisco", "bay area", "san jose", "san diego", "monterey", "santa cruz", "salinas", "denver",
-                 "colorado", "remote"]
-TARGET_KEYWORDS = ["machine learning", "reinforcement learning", "neural network",
-                   "transformer", "predictive model", "forecast", "data scientist",
-                   "data engineer", "analytics", "quantitative", "ml ", "ai ",
-                   "research", "trading", "sportsbook", "operations"]
+                 "san francisco", "bay area", "san jose", "san diego", "monterey", "denver",
+                 "colorado", "austin", "seattle", "new york", "remote"]
+TARGET_KEYWORDS = ["software engineer", "backend", "frontend", "full stack", "platform",
+                   "infrastructure", "devops", "site reliability", "data engineer",
+                   "machine learning", "artificial intelligence", "security engineer",
+                   "product engineer", "mobile", "ios", "android", "api", "distributed systems"]
 NEGATIVE_KEYWORDS = ["intern", "internship", "seasonal", "part-time", "part time"]
 
 
