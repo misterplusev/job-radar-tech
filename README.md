@@ -1,54 +1,25 @@
-# Job Radar
+# Tech Job Radar
 
-Automated job-hunting platform: **scrape** many sources → **match** each posting against a
-skills matrix → **alert** strong fits to Discord → **draft** a tailored resume + cover letter.
-Wide net across tech companies + startups (and, in a separate isolated track, sportsbooks).
+Production: employer careers / official ATS sources -> Python ingestion -> Supabase -> searchable board and Discord job alerts.
 
-```
-sources ─▶ ingest ─▶ jobs (SQLite/Supabase) ─▶ score (heuristic | Claude judge) ─▶ job_scores
-                                                                     │
-                                              Discord digest ◀───────┤
-                                              resume+cover draft ◀────┤ (on demand)
-                                              HTML dashboard ◀────────┘
-```
+**Start here:** [shared architecture, operations and new-industry build guide](https://github.com/misterplusev/job-radar/tree/master/docs/job-scrapers). Verified November 10, 2026. Machine inventory and a read-only schedule/health checker are included there.
 
-## Status (working, tested end-to-end)
-- **Ingestion:** Greenhouse ✅, Ashby ✅ (live: 3k+ real jobs incl. Anthropic/OpenAI/Databricks/Stripe), Lever ✅ (wired; needs real slugs), Workday/Indeed = roadmap.
-- **Storage:** SQLite (local dev, zero setup) or Supabase (prod) behind one interface.
-- **Matcher:** free **heuristic scorer** (runs now) + **Claude judge** (when `ANTHROPIC_API_KEY` set). Prefilter drops off-target/offshore/internship roles.
-- **Alerts:** single deduped Discord digest of matches ≥ threshold.
-- **Generation:** resume + cover-letter drafts with hard truth-guardrails, written to `GENERATED_DOCS_DIR` + tracked in `applications`.
-- **Dashboard:** self-contained filterable HTML (`out/dashboard.html`).
-- **Scheduler:** GitHub Actions (`.github/workflows/pipeline.yml`, every 3h).
+## Current production
 
-## Quickstart (local, no cloud)
-```bash
-pip install -r requirements.txt
-python run.py ingest      # scrape providers -> local SQLite
-python run.py score       # rate every job against the matrix
-python run.py report      # top matches in the terminal
-python run.py render      # -> out/dashboard.html  (open it)
-python run.py alert       # dry-run digest (no webhook set = prints instead of posting)
-python run.py generate --job-id 2247   # draft resume+cover for a job
-python run.py pipeline    # ingest -> score -> alert in one shot
-```
+- Repository default branch: `master`; workflow `.github/workflows/pipeline.yml`.
+- Schedule: `37 * * * *` UTC, configured hourly at :37. Recent scheduled executions have multi-hour gaps; this configuration is not proof of hourly delivery.
+- Entry point: `python run.py ingest`; then `python run.py render --out out/dashboard.html` uploads a workflow artifact.
+- Targets: `config/targets.json`; providers in `jobradar/providers/` include Greenhouse, Lever, Ashby, Amazon and Workday.
+- Tables: `tech_jobs`, `tech_job_scrape_runs`, `tech_applications`; view `tech_jobs_with_applied` in the shared Supabase project.
+- Board: [Tech jobs](https://misterplusev.github.io/jobradar-tech-board/). Its static frontend is a separate board repository; rendering the workflow artifact does not redeploy it.
+- Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DISCORD_WEBHOOK_JOBS`; schema step uses `SUPABASE_ACCESS_TOKEN` and `SUPABASE_PROJECT_REF`.
 
-## Configuration
-- Copy `.env.example` → `.env` (gitignored). Keys: `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` (omit → SQLite), `ANTHROPIC_API_KEY` (omit → heuristic scorer), `DISCORD_JOB_RADAR_WEBHOOK`, `ALERT_MIN_SCORE`, `MATRIX_PATH`, `GENERATED_DOCS_DIR`.
-- **Targets:** `config/targets.json` — company slugs per ATS + Indeed queries. Populate the sportsbook + tech slugs from the career-page discovery task.
-- **Profile:** `config/skills_matrix.md` (bundled copy of the master matrix — keep it in sync; it *is* the scoring rubric).
+Tech collection and notification configuration is separate from the robotics module. New-job alerts use database URL deduplication. This module does not have the teams module's durable notification queue; an alert failure after a successful upsert may not retry on the next run. See the shared architecture for actual pacing and recovery limitations.
 
-## Storage / prod
-Apply `db/schema.sql` once in the Supabase SQL editor, set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`, and the same commands write to Supabase instead of SQLite. **Use a current project — not the dead legacy `kiujpszjsszqzinyxkoi`.**
+## Working on the code
 
-## Deploy (automated)
-Add repo secrets (Settings → Secrets → Actions): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DISCORD_JOB_RADAR_WEBHOOK`, `ANTHROPIC_API_KEY` (optional), `ANTHROPIC_MODEL`, `ALERT_MIN_SCORE`. The workflow runs the pipeline every 3h and uploads the dashboard as an artifact.
+Read the workflow, current provider source, module schema and applicable local instructions before running commands. `run.py ingest` can write production and send alerts when secrets are present; it is not a read-only inspection. `db/apply_schema.py` applies SQL. Preserve local uncommitted work.
 
-## Guardrails & security
-- **Repo must stay private** — it bundles the personal skills matrix.
-- Secrets live only in `.env` / provider secret stores — never committed (`.gitignore` enforces `.env*`, `*secret*`, `PROJECT_KEYS*`).
-- Generation obeys: Columbia Bank = **Seattle** (not Tacoma); **never** claim the Umpqua merger; Series 7/63 = **lapsed**; **no fabrication**.
-- **Assisted apply, not auto-submit:** the platform finds/scores/drafts/tracks; a human reviews and submits.
+Optional scoring, LLM judging and resume/cover-letter generation code remains in this repository. Those commands are separate from the scheduled ingestion workflow and are not automatically run in production. A generated document or board checkbox is not an application submission.
 
-## Roadmap
-Lever/Workday/Indeed providers + real slugs (from the career-page discovery task) · sportsbook career pages in the isolated `sportsbook-jobs-dashboard` repo · PDF export of generated docs · Radar dashboard on Vercel/Pages · feedback loop to tune the threshold.
+This repository is public. Keep credentials, personal skills matrices, resumes and private application records out of new commits and public artifacts. Never put service-role keys in a frontend. Preserve employer evidence and immutable discovery dates.
