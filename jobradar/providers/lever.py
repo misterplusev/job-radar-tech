@@ -16,17 +16,16 @@ class LeverProvider(Provider):
     source = "lever"
 
     def fetch(self, run_id: str) -> List[Job]:
-        try:
-            data = http_get(API.format(slug=self.slug)).json()
-        except Exception:
-            return []
+        data = http_get(API.format(slug=self.slug)).json()
+        if not isinstance(data, list):
+            raise ValueError("Lever returned an invalid posting list")
         company = self.slug.replace("-", " ").title()
         jobs: List[Job] = []
         for p in data:
             title = clean_ws(p.get("text"))
             url = p.get("hostedUrl") or p.get("applyUrl") or ""
             if not title or not url:
-                continue
+                raise ValueError("Posting missing title or URL; observation is incomplete")
             loc = clean_ws((p.get("categories") or {}).get("location"))
             desc = clean_ws(p.get("descriptionPlain") or p.get("description"))
             jobs.append(Job(company=company, title=title, url=url, location=loc or None,

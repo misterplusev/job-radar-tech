@@ -31,6 +31,7 @@ DRY_RUN = False
 
 BASE_URL = "https://api.github.com"  # unused placeholder to keep module import-safe
 TABLE_JOBS = "tech_jobs"
+TABLE_NOTIFICATIONS = "tech_job_notifications"
 # Must match db/schema_tech.sql. This was hardcoded to the robotics table, so
 # every tech receipt was written into public.robotics_job_scrape_runs and the
 # tech telemetry table stayed permanently empty (verified: 0 rows in prod).
@@ -41,6 +42,7 @@ BATCH_SIZE = 100
 CHUNK_SIZE = 5
 POSTED_DAYS_MAX = 14
 PROVIDER_TIMEOUT = 120
+DISCORD_PACE_SECONDS = 2.1
 BOARD_LOGOS_BASE = "https://misterplusev.github.io/jobradar-tech-board/logos"
 
 
@@ -67,6 +69,18 @@ def _headers(key: str) -> dict:
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+
+
+def _discord_retry_after(response) -> float:
+    """Parse Discord's retry_after (seconds) from a 429 response, bounded."""
+    try:
+        body = response.json()
+        wait = float(body.get("retry_after", 0) or 0)
+    except Exception:  # noqa: BLE001
+        wait = 0.0
+    if wait > 120:
+        raise RuntimeError("Discord rate-limit wait exceeds delivery budget; preserve pending queue")
+    return max(wait, 1.0)
 
 
 def _rest(url_base: str, table: str) -> str:
@@ -98,33 +112,48 @@ def fetch_existing_urls(url_base: str, key: str, company: str) -> Set[str]:
     return urls
 
 
-def deactivate(url_base: str, key: str, company: str, urls: Set[str]) -> None:
-    """Mark vanished postings inactive. Falls back if closed_at is missing."""
-    if not urls:
-        return
-    payload = {"is_active": False, "closed_at": now_iso()}
-    try:
-        r = requests.patch(
-            _rest(url_base, TABLE_JOBS),
-            headers=_headers(key),
-            params={"company": f"eq.{company}", "url": f"in.({','.join(urls)})"},
-            json=payload,
-            timeout=120,
-        )
-        r.raise_for_status()
-    except HTTPError as e:
-        resp = e.response
-        if resp is not None and resp.status_code == 400 and "closed_at" in (resp.text or "").lower():
-            r = requests.patch(
-                _rest(url_base, TABLE_JOBS),
-                headers=_headers(key),
-                params={"company": f"eq.{company}", "url": f"in.({','.join(urls)})"},
-                json={"is_active": False},
-                timeout=120,
-            )
-            r.raise_for_status()
+def _deactivation_batches(url_base: str, company: str, urls: Set[str]):
+    """Keep encoded request URLs below 6 KB, including PostgREST quoting."""
+    batch = []
+    for url in sorted(urls):
+        candidate = batch + [url]
+        params = {"company": f"eq.{company}", "is_active": "eq.true",
+                  "url": "in.(" + ",".join(json.dumps(u) for u in candidate) + ")",
+                  "select": "id"}
+        prepared = requests.Request("PATCH", _rest(url_base, TABLE_JOBS), params=params).prepare()
+        if len(prepared.url.encode("utf-8")) > 6000:
+            if not batch:
+                raise ValueError("A job URL exceeds the safe cleanup request size")
+            yield batch
+            batch = [url]
+            single = dict(params, url="in.(" + json.dumps(url) + ")")
+            prepared = requests.Request("PATCH", _rest(url_base, TABLE_JOBS), params=single).prepare()
+            if len(prepared.url.encode("utf-8")) > 6000:
+                raise ValueError("A job URL exceeds the safe cleanup request size")
         else:
-            print(f"[PUBLISH] deactivate failed for {company}: {e}")
+            batch = candidate
+    if batch:
+        yield batch
+
+
+def deactivate(url_base: str, key: str, company: str, urls: Set[str]) -> int:
+    """Retire absent active URLs in bounded batches; return confirmed row count."""
+    updated = 0
+    headers = dict(_headers(key), Prefer="return=representation")
+    for batch in _deactivation_batches(url_base, company, urls):
+        params = {"company": f"eq.{company}", "is_active": "eq.true",
+                  "url": "in.(" + ",".join(json.dumps(u) for u in batch) + ")",
+                  "select": "id"}
+        payload = {"is_active": False, "closed_at": now_iso()}
+        response = requests.patch(_rest(url_base, TABLE_JOBS), headers=headers,
+                                  params=params, json=payload, timeout=120)
+        if (response.status_code == 400 and
+                "closed_at" in (response.text or "").lower()):
+            response = requests.patch(_rest(url_base, TABLE_JOBS), headers=headers,
+                                      params=params, json={"is_active": False}, timeout=120)
+        response.raise_for_status()
+        updated += len(response.json())
+    return updated
 
 
 def upsert(url_base: str, key: str, rows: List[dict]) -> None:
@@ -147,7 +176,7 @@ def upsert(url_base: str, key: str, rows: List[dict]) -> None:
             except HTTPError as e:
                 resp = e.response
                 status = resp.status_code if resp is not None else 0
-                if status in (429, 500, 502, 503, 504):
+                if status in (429, 500, 502, 503, 504) and attempt < 2:
                     wait = 3 * (attempt + 1)
                     print(f"[PUBLISH] {status} on batch {n}, retry {attempt + 1} in {wait}s")
                     time.sleep(wait)
@@ -158,16 +187,14 @@ def upsert(url_base: str, key: str, rows: List[dict]) -> None:
 
 
 def record_run(url_base: str, key: str, provider: str, status: str, job_count: int,
-               error_summary: str = "", trigger: str = "scheduled") -> None:
-    body: dict = {"provider": provider, "status": status, "job_count": job_count,
-                  "trigger_source": trigger}
+               error_summary: str = "", trigger: str = "") -> None:
+    body = {"provider": provider, "status": status, "job_count": job_count,
+            "trigger_source": trigger or os.environ.get("GITHUB_EVENT_NAME", "manual")}
     if error_summary:
         body["error_summary"] = error_summary
-    try:
-        requests.post(_rest(url_base, TABLE_RUNS), headers=_headers(key),
-                      json=[body], timeout=60)
-    except Exception as e:  # noqa: BLE001
-        print(f"[TELEMETRY] failed to record scrape run: {e}")
+    response = requests.post(_rest(url_base, TABLE_RUNS), headers=_headers(key),
+                             json=[body], timeout=60)
+    response.raise_for_status()
 
 
 # --------------------------------------------------------------------------- #
@@ -210,32 +237,114 @@ def _embed(job: dict) -> dict:
     return embed
 
 
-def notify_new_jobs(new_jobs: List[dict]) -> None:
-    if not DISCORD_WEBHOOK_JOBS and not DRY_RUN:
-        print("[DISCORD] DISCORD_WEBHOOK_JOBS not configured; skipping new job alerts")
-        return
+def queue_new_jobs(url_base: str, key: str, new_jobs: List[dict]) -> int:
+    """Persist intent BEFORE job upsert; conflicts preserve prior delivery state."""
     recent = [j for j in new_jobs if _is_recently_posted(j.get("posted_at"))]
-    if not recent:
-        print("[DISCORD] No recently posted jobs to announce")
-        return
-    for idx in range(0, len(recent), CHUNK_SIZE):
-        chunk = recent[idx : idx + CHUNK_SIZE]
-        payload = {"content": f"New tech jobs discovered: {len(chunk)}",
-                   "embeds": [_embed(j) for j in chunk]}
-        if DRY_RUN:
-            print(f"[DRY-RUN] Chunk {idx // CHUNK_SIZE + 1}: {json.dumps(payload, indent=2)[:400]}")
+    # Tech preserves its existing date-only notification eligibility.
+    if DRY_RUN:
+        return len(recent)
+    headers = dict(_headers(key), Prefer="resolution=ignore-duplicates")
+    endpoint = _rest(url_base, TABLE_NOTIFICATIONS) + "?on_conflict=company,job_url"
+    for start in range(0, len(recent), BATCH_SIZE):
+        rows = [{"company": j["company"], "job_url": j["url"], "payload": j}
+                for j in recent[start:start + BATCH_SIZE]]
+        response = requests.post(endpoint, headers=headers, json=rows, timeout=60)
+        response.raise_for_status()
+    return len(recent)
+
+
+def _send_notification_chunk(jobs: List[dict]) -> str:
+    payload = {"content": f"New tech jobs discovered: {len(jobs)}",
+               "embeds": [_embed(j) for j in jobs]}
+    for attempt in range(8):
+        response = requests.post(DISCORD_WEBHOOK_JOBS, params={"wait": "true"},
+                                 json=payload, timeout=30)
+        if response.status_code == 429 and attempt < 7:
+            time.sleep(_discord_retry_after(response))
             continue
-        for attempt in range(3):
-            r = requests.post(DISCORD_WEBHOOK_JOBS, json=payload, timeout=30)
-            if r.status_code == 429:
-                wait = 3 * (attempt + 1)
-                print(f"[DISCORD] 429 on chunk {idx // CHUNK_SIZE + 1}, retrying in {wait}s")
-                time.sleep(wait)
-                continue
-            r.raise_for_status()
+        response.raise_for_status()
+        message_id = response.json().get("id")
+        if not message_id:
+            raise RuntimeError("Discord did not return a delivery message ID")
+        return str(message_id)
+    raise RuntimeError("Discord retries exhausted")
+
+
+def _ack_notifications(url_base: str, key: str, ids: List[int], state: str,
+                       message_id: str = "") -> None:
+    payload = {"state": state}
+    if state == "delivered":
+        payload.update(delivered_at=now_iso(), discord_message_id=message_id)
+    response = requests.patch(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
+                              params={"id": "in.(" + ",".join(str(i) for i in ids) + ")",
+                                      "state": "eq.pending"}, json=payload, timeout=60)
+    response.raise_for_status()
+
+
+def notify_new_jobs(new_jobs: List[dict]) -> int:
+    """Drain durable pending intent, acknowledging only successful Discord chunks.
+
+    Workflow concurrency must serialize this publisher. Delivery is at-least-once:
+    a crash after Discord accepts but before the DB acknowledgement can repeat a chunk.
+    """
+    if DRY_RUN:
+        print(f"[DRY-RUN] {len(new_jobs)} candidate notifications; no state changed")
+        return 0
+    url_base, key = supabase_env()
+    queue_new_jobs(url_base, key, new_jobs)
+    delivered = 0
+    cursor = 0
+    deadline = time.monotonic() + 600
+    for _page in range(1000):
+        if time.monotonic() >= deadline:
             break
-        time.sleep(0.5)
-    print(f"[DISCORD] Posted {len(recent)} new tech jobs")
+        response = requests.get(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
+                                params={"state": "eq.pending", "id": f"gt.{cursor}",
+                                        "order": "id.asc", "limit": 100,
+                                        "select": "id,company,job_url,payload"}, timeout=60)
+        response.raise_for_status()
+        pending = response.json()
+        if not pending:
+            break
+        ready = []
+        for item in pending:
+            if time.monotonic() >= deadline:
+                break
+            cursor = item["id"]
+            job = item["payload"]
+            if not _is_recently_posted(job.get("posted_at")):
+                _ack_notifications(url_base, key, [item["id"]], "expired")
+                continue
+            # An interrupted queue-before-upsert must never announce an unsaved job.
+            check = requests.get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
+                                 params={"company": f"eq.{item['company']}",
+                                         "url": f"eq.{item['job_url']}",
+                                         "select": "id,is_active", "limit": 1}, timeout=30)
+            check.raise_for_status()
+            saved = check.json()
+            if not saved:
+                continue  # Preserve pending intent for a later successful ingestion.
+            if not saved[0]["is_active"]:
+                _ack_notifications(url_base, key, [item["id"]], "inactive")
+                continue
+            ready.append(item)
+            if len(ready) == CHUNK_SIZE:
+                if not DISCORD_WEBHOOK_JOBS:
+                    raise RuntimeError("Pending alerts exist but DISCORD_WEBHOOK_JOBS is missing")
+                message_id = _send_notification_chunk([r["payload"] for r in ready])
+                _ack_notifications(url_base, key, [r["id"] for r in ready], "delivered", message_id)
+                delivered += len(ready)
+                ready.clear()
+                time.sleep(DISCORD_PACE_SECONDS)
+        if ready:
+            if not DISCORD_WEBHOOK_JOBS:
+                raise RuntimeError("Pending alerts exist but DISCORD_WEBHOOK_JOBS is missing")
+            message_id = _send_notification_chunk([r["payload"] for r in ready])
+            _ack_notifications(url_base, key, [r["id"] for r in ready], "delivered", message_id)
+            delivered += len(ready)
+            time.sleep(DISCORD_PACE_SECONDS)
+    print(f"[DISCORD] Confirmed {delivered} delivered tech jobs; other pending jobs remain queued")
+    return delivered
 
 
 def notify_failure(error_message: str) -> None:
@@ -271,6 +380,7 @@ def serialize(job) -> dict:
         "url": job.url,
         "location": job.location,
         "is_active": bool(job.is_active),
+        "closed_at": None if job.is_active else now_iso(),
         "last_seen_at": now_iso(),
         "scraped_at": now_iso(),
         "ats": job.source,
@@ -296,14 +406,37 @@ def serialize(job) -> dict:
     return row
 
 
-def publish(jobs) -> None:
+def retire_empty_sources(url_base, key, empty_providers):
+    """Only sources verified empty are reconciled; active rows carry their source identity."""
+    total = 0
+    for source, slug in empty_providers:
+        # Always refetch page zero because successful retirement removes these rows.
+        for _page in range(1000):
+            response = requests.get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
+                params={"ats": f"eq.{source}", "source_payload->>provider_slug": f"eq.{slug}",
+                        "is_active": "eq.true", "select": "company,url", "order": "id", "limit": 100}, timeout=60)
+            response.raise_for_status()
+            rows = response.json()
+            if not rows:
+                break
+            grouped = {}
+            for row in rows:
+                grouped.setdefault(row["company"], set()).add(row["url"])
+            for company, urls in grouped.items():
+                total += deactivate(url_base, key, company, urls)
+        else:
+            raise RuntimeError("Empty-source cleanup exceeded safety limit")
+    return total
+
+
+def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
     """Full publish cycle for one scrape run: upsert -> deactivate -> announce."""
     url_base, key = supabase_env()
+    totals = {"upserted": 0, "deactivated": 0, "queued_candidates": 0, "delivered": 0}
     grouped: Dict[str, list] = {}
     for job in jobs:
         grouped.setdefault(job.company, []).append(job)
 
-    new_jobs: List[dict] = []
     for company, company_jobs in grouped.items():
         existing_urls = fetch_existing_urls(url_base, key, company)
         seen: Set[str] = set()
@@ -314,12 +447,19 @@ def publish(jobs) -> None:
                 continue
             seen.add(row["url"])
             rows.append(row)
+        totals["queued_candidates"] += queue_new_jobs(url_base, key, [r for r in rows if r["url"] not in existing_urls])
         upsert(url_base, key, [r for r in rows if "description" in r])
         upsert(url_base, key, [r for r in rows if "description" not in r])
-        new_jobs.extend(r for r in rows if r["url"] not in existing_urls)
         removed = existing_urls - seen
-        if removed:
-            deactivate(url_base, key, company, removed)
-        print(f"[PUBLISH] upserted {len(rows)} (deactivated {len(removed)}) for {company}")
+        deactivated = deactivate(url_base, key, company, removed) if allow_deactivate else 0
+        totals["upserted"] += len(rows)
+        totals["deactivated"] += deactivated
+        print(f"[PUBLISH] upserted {len(rows)} (deactivated {deactivated}) for {company}")
+        if removed and not allow_deactivate:
+            print(f"[PUBLISH] cleanup deferred for {company}: incomplete provider run")
 
-    notify_new_jobs(new_jobs)
+    if allow_deactivate:
+        totals["deactivated"] += retire_empty_sources(url_base, key, empty_providers)
+    totals["delivered"] = notify_new_jobs([])
+    return totals
+

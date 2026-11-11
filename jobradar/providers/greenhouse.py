@@ -35,17 +35,16 @@ class GreenhouseProvider(Provider):
         url = API.format(slug=self.slug)
         if not self.content:
             url = url.replace("?content=true", "")
-        try:
-            data = http_get(url).json()
-        except Exception:
-            return []  # unknown/closed board -> no jobs, don't crash the run
+        data = http_get(url).json()
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+            raise ValueError("greenhouse returned an invalid posting list")
         company = _board_company(data, self.slug)
         jobs: List[Job] = []
         for j in data.get("jobs", []):
             title = clean_ws(j.get("title"))
             j_url = j.get("absolute_url") or ""
             if not title or not j_url:
-                continue
+                raise ValueError("Posting missing title or URL; observation is incomplete")
             location = clean_ws((j.get("location") or {}).get("name"))
             desc = _strip_html(j.get("content") or "")
             jobs.append(Job(

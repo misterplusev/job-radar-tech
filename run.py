@@ -53,37 +53,74 @@ def _scrape_all() -> list:
 
 
 def _ingest_supabase() -> int:
-    """Prod path: scrape -> publish to tech_* tables -> telemetry -> Discord."""
+    """Fetch complete source observations; persist truthful health and delivery receipts."""
+    import json
+    import os
     from jobradar import publish
+    from jobradar.fetch_worker import fetch_provider
 
-    url_base, key = publish.supabase_env()
-    providers = build_providers(settings.load_targets())
-    print(f"[ingest] {len(providers)} providers | storage=supabase(tech_*)")
-    all_jobs = []
-    for p in providers:
-        rid = _run_id(f"{p.source}:{p.provider_slug}")
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(p.fetch, rid)
-                jobs = future.result(timeout=PROVIDER_TIMEOUT)
-            print(f"  [{p.source}:{p.provider_slug}] {len(jobs)} jobs")
-            all_jobs.extend(jobs)
-            publish.record_run(url_base, key, f"{p.source}:{p.provider_slug}",
-                               "success", len(jobs))
-        except concurrent.futures.TimeoutError:
-            publish.record_run(url_base, key, f"{p.source}:{p.provider_slug}",
-                               "error", 0, f"Timeout {PROVIDER_TIMEOUT}s")
-            print(f"  [{p.source}:{p.provider_slug}] TIMEOUT after {PROVIDER_TIMEOUT}s")
-        except Exception as e:  # noqa: BLE001
-            publish.record_run(url_base, key, f"{p.source}:{p.provider_slug}",
-                               "error", 0, str(e)[:500])
-            print(f"  [{p.source}:{p.provider_slug}] ERROR: {e}")
-
-    print(f"[ingest] collected {len(all_jobs)} jobs")
-    if not all_jobs:
-        raise RuntimeError("No tech jobs scraped from any provider.")
-    publish.publish(all_jobs)
-    return 0
+    manifest = {"schema": "abet.jobs.scrape-manifest.v2", "module": "tech",
+                "started_at": now_iso(), "status": "running", "providers": [],
+                "trigger": os.environ.get("JOBRADAR_TRIGGER", os.environ.get("GITHUB_EVENT_NAME", "manual")),
+                "scheduler_slot": os.environ.get("JOBRADAR_SCHEDULER_SLOT", ""),
+                "github_run_id": os.environ.get("GITHUB_RUN_ID", "")}
+    manifest_path = Path("data/runtime/latest_manifest.json")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    def save():
+        temp = manifest_path.with_suffix(".tmp")
+        temp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        temp.replace(manifest_path)
+    save()
+    try:
+        url_base, key = publish.supabase_env()
+        providers = build_providers(settings.load_targets())
+        if not providers:
+            raise RuntimeError("No providers configured")
+        manifest["expected_providers"] = len(providers)
+        all_jobs, failures, empty_providers = [], [], []
+        for provider in providers:
+            label = f"{provider.source}:{provider.provider_slug}"
+            started = time.monotonic()
+            receipt = {"provider": label}
+            try:
+                jobs = fetch_provider(provider, _run_id(label),
+                                      timeout=300 if provider.source == "amazon" else 180)
+                all_jobs.extend(jobs)
+                if not jobs:
+                    empty_providers.append((provider.source, provider.provider_slug))
+                receipt.update(status="success", job_count=len(jobs), complete=True)
+                print(f"  [{label}] {len(jobs)} jobs", flush=True)
+            except Exception as exc:
+                failures.append(label)
+                receipt.update(status="error", job_count=0, complete=False, error=str(exc)[:1200])
+                print(f"  [{label}] ERROR: {type(exc).__name__}: {str(exc)[:300]}", flush=True)
+            receipt["seconds"] = round(time.monotonic() - started, 2)
+            manifest["providers"].append(receipt)
+            try:
+                publish.record_run(url_base, key, label, receipt["status"], receipt["job_count"],
+                                   receipt.get("error", ""), trigger=manifest["trigger"])
+            except Exception as exc:
+                failures.append(f"telemetry:{label}")
+                receipt["telemetry_error"] = type(exc).__name__
+            save()
+        manifest["collected_jobs"] = len(all_jobs)
+        if not all_jobs and failures:
+            raise RuntimeError("No jobs collected and at least one provider failed")
+        manifest["publish"] = publish.publish(all_jobs, allow_deactivate=not failures,
+                                             empty_providers=empty_providers)
+        if failures:
+            manifest["status"] = "degraded"
+            raise RuntimeError(f"Partial scrape: {len(failures)} failures: " + ", ".join(failures))
+        manifest["status"] = "healthy"
+        return 0
+    except Exception as exc:
+        if manifest["status"] != "degraded":
+            manifest["status"] = "failed"
+        manifest["error"] = str(exc)[:2000]
+        raise
+    finally:
+        manifest["finished_at"] = now_iso()
+        save()
 
 
 def _ingest_sqlite() -> int:
@@ -192,3 +229,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
