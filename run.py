@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import settings  # noqa: E402
+from jobradar.diagnostics import safe_error
 from jobradar.models import now_iso  # noqa: E402
 from jobradar.providers import build_providers  # noqa: E402
 from jobradar.storage import get_storage  # noqa: E402
@@ -92,8 +93,8 @@ def _ingest_supabase() -> int:
                 print(f"  [{label}] {len(jobs)} jobs", flush=True)
             except Exception as exc:
                 failures.append(label)
-                receipt.update(status="error", job_count=0, complete=False, error=str(exc)[:1200])
-                print(f"  [{label}] ERROR: {type(exc).__name__}: {str(exc)[:300]}", flush=True)
+                receipt.update(status="error", job_count=0, complete=False, error=safe_error(exc)[:1200])
+                print(f"  [{label}] ERROR: {type(exc).__name__}: {safe_error(exc)[:300]}", flush=True)
             receipt["seconds"] = round(time.monotonic() - started, 2)
             manifest["providers"].append(receipt)
             try:
@@ -116,7 +117,7 @@ def _ingest_supabase() -> int:
     except Exception as exc:
         if manifest["status"] != "degraded":
             manifest["status"] = "failed"
-        manifest["error"] = str(exc)[:2000]
+        manifest["error"] = safe_error(exc)[:2000]
         raise
     finally:
         manifest["finished_at"] = now_iso()
@@ -155,8 +156,8 @@ def cmd_ingest(args) -> int:
             return _ingest_supabase()
         except Exception as e:  # noqa: BLE001
             from jobradar.publish import notify_failure
-            print(f"[FATAL] {e}")
-            notify_failure(str(e))
+            print(f"[FATAL] {safe_error(e)}")
+            notify_failure(safe_error(e))
             return 1
     return _ingest_sqlite()
 
