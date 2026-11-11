@@ -1,64 +1,25 @@
-name: job-radar-pipeline
-run-name: job-radar ${{ inputs.scheduler_slot || github.event_name }}
-
-on:
-  workflow_dispatch:
-    inputs:
-      scheduler_slot:
-        description: UTC hourly slot assigned by the Cloudflare scheduler
-        required: false
-        type: string
-      trigger_source:
-        description: Dispatch origin
-        required: false
-        default: manual
-        type: string
-
-# Cloudflare abet-jobs-scheduler owns the schedule; no second GitHub cron.
-concurrency:
-  group: job-radar-pipeline
-  cancel-in-progress: false
-
+name: Read-only Discord wiring audit
+run-name: discord-wiring-audit-20261111
+on: workflow_dispatch
 permissions:
   contents: read
-
 jobs:
-  pipeline:
+  audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Regression checks
-        run: python -m unittest discover -s tests -v
-      - name: Apply additive schema
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: python db/apply_schema.py
-      - name: Scrape, reconcile, and deliver pending notifications
+      - run: pip install requests
+      - name: Inspect metadata and existing messages with GET only
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          DISCORD_WEBHOOK_JOBS: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
-          JOBRADAR_TRIGGER: ${{ inputs.trigger_source || github.event_name }}
-          JOBRADAR_SCHEDULER_SLOT: ${{ inputs.scheduler_slot }}
-        run: python -u run.py ingest
-      - name: Render dashboard artifact
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python run.py render --out out/dashboard.html
+          AUDIT_WEBHOOK_TECH: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
+        run: python audit_discord_job_routes.py tech
       - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
         with:
-          name: job-radar-receipt
-          path: |
-            out/dashboard.html
-            data/runtime/latest_manifest.json
-          if-no-files-found: warn
+          name: discord-wiring-audit
+          path: discord-wiring-audit.json
