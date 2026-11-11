@@ -48,6 +48,7 @@ class WorkdayProvider(Provider):
         jobs: List[Job] = []
         seen = set()
         offset = 0
+        expected_total = None
         for _page in range(50):
             r = requests.post(
                 f"https://{host}/wday/cxs/{self.slug}/{site}/jobs",
@@ -59,10 +60,16 @@ class WorkdayProvider(Provider):
             data = r.json()
             if not isinstance(data.get("jobPostings"), list) or "total" not in data:
                 raise ValueError("Workday returned an invalid result page")
+            # Workday commonly returns total=0 on every page after page one.
+            # Retain the initial advertised total instead of ending at page two.
+            if expected_total is None:
+                expected_total = int(data["total"])
+            else:
+                expected_total = max(expected_total, int(data["total"]))
             fresh = [jp for jp in (data.get("jobPostings") or [])
                      if jp.get("externalPath") not in seen]
             if not fresh:
-                if offset < int(data["total"]):
+                if offset < expected_total:
                     raise ValueError("Workday pagination ended before the advertised total")
                 break
             for jp in fresh:
@@ -83,7 +90,7 @@ class WorkdayProvider(Provider):
                     is_active=True,
                 ))
             offset += len(data["jobPostings"])
-            if offset >= int(data["total"]):
+            if offset >= expected_total:
                 break
         else:
             raise RuntimeError("Workday pagination safety limit reached; incomplete observation")
