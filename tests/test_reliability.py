@@ -166,6 +166,58 @@ class RepairTests(unittest.TestCase):
                         ns['upsert']('https://offline.invalid', 'fake', [{'company': 'Employer', 'url': 'https://example/1'}])
                     self.assertEqual(db.write_attempts, 3)
 
+
+    def test_transport_retry_reuses_exact_upsert_batch(self):
+        for error in (requests.ReadTimeout, requests.ConnectionError):
+            ns, db = load_publisher(MODULES[0])
+            rows = [{'company': 'Employer', 'url': 'https://example/1'}]
+            with patch.object(db, 'post', side_effect=[error('network interrupted'), Response(None, 201)]) as post:
+                ns['upsert']('https://offline.invalid', 'fake', rows)
+            self.assertEqual(post.call_count, 2)
+            self.assertEqual(post.call_args_list[0], post.call_args_list[1])
+
+    def test_exhausted_transport_retry_preserves_pending_intent(self):
+        ns, db = load_publisher(MODULES[0])
+        original = db.post
+        writes = []
+        def interrupted(url, **kwargs):
+            if '_job_notifications' not in url:
+                writes.append(url)
+                raise requests.ReadTimeout('database response lost')
+            return original(url, **kwargs)
+        with patch.object(db, 'post', side_effect=interrupted):
+            with self.assertRaises(requests.ReadTimeout):
+                ns['publish']([make_job(1)])
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(db.queue[0]['state'], 'pending')
+        self.assertEqual(db.sends, [])
+        ns['publish']([make_job(1)])
+        self.assertEqual(len(db.sends), 1)
+
+    def test_committed_upsert_with_lost_response_does_not_duplicate(self):
+        ns, db = load_publisher(MODULES[0])
+        original = db.post
+        lost = []
+        def commit_then_disconnect(url, **kwargs):
+            response = original(url, **kwargs)
+            if '_jobs?on_conflict=' in url and not lost:
+                lost.append(True)
+                raise requests.ConnectionError('response lost after commit')
+            return response
+        with patch.object(db, 'post', side_effect=commit_then_disconnect):
+            ns['publish']([make_job(1)])
+        self.assertEqual(db.write_attempts, 2)
+        self.assertEqual(len(db.jobs), 1)
+        self.assertEqual(len(db.sends), 1)
+        self.assertEqual(db.queue[0]['state'], 'delivered')
+
+    def test_nonretryable_database_error_fails_immediately(self):
+        ns, db = load_publisher(MODULES[0])
+        db.write_status = 400
+        with self.assertRaises(requests.HTTPError):
+            ns['upsert']('https://offline.invalid', 'fake', [{'company': 'Employer', 'url': 'https://example/1'}])
+        self.assertEqual(db.write_attempts, 1)
+
     def test_failed_write_preserves_intent_and_next_run_delivers_once(self):
         for module in MODULES:
             with self.subTest(module=module):

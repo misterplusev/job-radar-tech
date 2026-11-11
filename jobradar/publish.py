@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 
 import requests
-from requests import HTTPError
+from requests import HTTPError, Timeout, ConnectionError
 
 DISCORD_WEBHOOK_JOBS = os.environ.get("DISCORD_WEBHOOK_JOBS", "").strip()
 DRY_RUN = False
@@ -157,7 +157,7 @@ def deactivate(url_base: str, key: str, company: str, urls: Set[str]) -> int:
 
 
 def upsert(url_base: str, key: str, rows: List[dict]) -> None:
-    """Batched merge-upsert with 429/5xx retries and a 400-body report."""
+    """Idempotent merge-upsert; bounded HTTP and transport-error retries."""
     if not rows:
         return
     endpoint = f"{_rest(url_base, TABLE_JOBS)}?on_conflict=company,url"
@@ -173,12 +173,14 @@ def upsert(url_base: str, key: str, rows: List[dict]) -> None:
                 r.raise_for_status()
                 print(f"[PUBLISH] upserted batch {n}/{total_batches} ({len(batch)} rows)")
                 break
-            except HTTPError as e:
+            except (HTTPError, Timeout, ConnectionError) as e:
                 resp = e.response
                 status = resp.status_code if resp is not None else 0
-                if status in (429, 500, 502, 503, 504) and attempt < 2:
+                retryable = isinstance(e, (Timeout, ConnectionError)) or status in (429, 500, 502, 503, 504)
+                if retryable and attempt < 2:
                     wait = 3 * (attempt + 1)
-                    print(f"[PUBLISH] {status} on batch {n}, retry {attempt + 1} in {wait}s")
+                    reason = type(e).__name__ if not status else str(status)
+                    print(f"[PUBLISH] {reason} on batch {n}, retry {attempt + 1} in {wait}s")
                     time.sleep(wait)
                     continue
                 if resp is not None:
