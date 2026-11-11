@@ -21,6 +21,8 @@ if not TOKEN or not REF:
 
 SQL_PATH = Path(__file__).resolve().parent / "schema_tech.sql"
 sql = SQL_PATH.read_text(encoding="utf-8")
+# Additive, service-role-only delivery state; no historical alert backfill.
+sql += "\n\n" + (SQL_PATH.parent / "schema_notifications.sql").read_text(encoding="utf-8")
 
 r = requests.post(
     f"https://api.supabase.com/v1/projects/{REF}/database/query",
@@ -33,3 +35,4 @@ if r.status_code in (200, 201):
 else:
     print(f"[MIGRATE] FAIL {r.status_code} {r.text[:300]}", file=sys.stderr)
     sys.exit(1)
+

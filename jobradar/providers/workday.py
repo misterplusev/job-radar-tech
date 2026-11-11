@@ -42,34 +42,34 @@ class WorkdayProvider(Provider):
     def fetch(self, run_id: str) -> List[Job]:
         board = _BOARDS.get(self.slug)
         if not board:
-            return []
+            raise ValueError("Unknown Workday board")
         host, site = board
         company = _BOARD_NAMES.get(self.slug, self.slug.replace("-", " ").title())
         jobs: List[Job] = []
         seen = set()
         offset = 0
         for _page in range(50):
-            try:
-                r = requests.post(
-                    f"https://{host}/wday/cxs/{self.slug}/{site}/jobs",
-                    headers=_HEADERS,
-                    json={"limit": 20, "offset": offset, "searchText": ""},
-                    timeout=30,
-                )
-            except Exception:
-                return jobs
-            if r.status_code != 200:
-                return jobs
+            r = requests.post(
+                f"https://{host}/wday/cxs/{self.slug}/{site}/jobs",
+                headers=_HEADERS,
+                json={"limit": 20, "offset": offset, "searchText": ""},
+                timeout=30,
+            )
+            r.raise_for_status()
             data = r.json()
+            if not isinstance(data.get("jobPostings"), list) or "total" not in data:
+                raise ValueError("Workday returned an invalid result page")
             fresh = [jp for jp in (data.get("jobPostings") or [])
                      if jp.get("externalPath") not in seen]
             if not fresh:
+                if offset < int(data["total"]):
+                    raise ValueError("Workday pagination ended before the advertised total")
                 break
             for jp in fresh:
                 title = clean_ws(jp.get("title"))
                 external = (jp.get("externalPath") or "").strip()
                 if not title or not external:
-                    continue
+                    raise ValueError("Workday posting missing title or URL")
                 seen.add(external)
                 url = external if external.startswith("http") else f"https://{host}/{site}{external}"
                 jobs.append(Job(
@@ -82,5 +82,9 @@ class WorkdayProvider(Provider):
                     run_id=run_id,
                     is_active=True,
                 ))
-            offset += 20
+            offset += len(data["jobPostings"])
+            if offset >= int(data["total"]):
+                break
+        else:
+            raise RuntimeError("Workday pagination safety limit reached; incomplete observation")
         return jobs

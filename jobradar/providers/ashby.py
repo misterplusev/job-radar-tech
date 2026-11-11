@@ -26,17 +26,16 @@ class AshbyProvider(Provider):
     source = "ashby"
 
     def fetch(self, run_id: str) -> List[Job]:
-        try:
-            data = http_get(API.format(slug=self.slug)).json()
-        except Exception:
-            return []
+        data = http_get(API.format(slug=self.slug)).json()
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+            raise ValueError("ashby returned an invalid posting list")
         company = clean_ws(data.get("name")) or self.slug.replace("-", " ").title()
         jobs: List[Job] = []
         for p in data.get("jobs", []):
             title = clean_ws(p.get("title"))
             url = p.get("jobUrl") or p.get("applyUrl") or ""
             if not title or not url:
-                continue
+                raise ValueError("Posting missing title or URL; observation is incomplete")
             loc = clean_ws(p.get("location") or p.get("locationName"))
             desc = _strip(p.get("descriptionHtml") or "") or clean_ws(p.get("descriptionPlain"))
             jobs.append(Job(company=company, title=title, url=url, location=loc or None,

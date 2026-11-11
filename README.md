@@ -1,3 +1,22 @@
+## Production reliability update — November 10, 2026
+
+Cloudflare Durable Object alarms in `abet-jobs-scheduler` now own hourly dispatch
+(:09 UTC robotics, :37 UTC tech). GitHub Actions remains the execution host;
+the old GitHub cron is removed to avoid two scheduler owners. The scheduler is
+activated only after release verification. Health: https://abet-jobs-scheduler.abetscrape.workers.dev/health
+
+Providers execute in bounded subprocesses and incomplete HTTP/pagination results
+raise errors. Cleanup uses request-size-bounded batches and confirmed update counts.
+Partial source runs preserve existing active jobs and produce a degraded manifest.
+Notifications use an RLS-protected persistent queue; delivery is acknowledged after
+Discord returns a message ID. Existing listings are not mass-replayed. Delivery is
+at-least-once if acceptance succeeds but the acknowledgement is lost.
+
+Run receipts are uploaded as `job-radar-receipt`, including
+`data/runtime/latest_manifest.json`. Inspect provider completeness and delivery
+totals, not just the workflow icon. The scheduler source and pause/rollback runbook
+live in `misterplusev/job-radar/runtime/cloudflare` and its shared scraper docs.
+
 # Tech Job Radar
 
 Production: employer careers / official ATS sources -> Python ingestion -> Supabase -> searchable board and Discord job alerts.

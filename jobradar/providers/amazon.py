@@ -22,15 +22,16 @@ class AmazonProvider(Provider):
     def fetch(self, run_id: str) -> List[Job]:
         jobs: List[Job] = []
         seen = set()
-        for query in QUERIES:
+        for query in [self.slug]:
             offset = 0
-            while True:
-                try:
-                    data = http_get(API.format(offset=offset, query=query.replace(" ", "%20"))).json()
-                except Exception:
-                    break
+            for _page in range(100):
+                data = http_get(API.format(offset=offset, query=query.replace(" ", "%20"))).json()
+                if not isinstance(data, dict) or not isinstance(data.get("jobs"), list) or "hits" not in data:
+                    raise ValueError("Amazon returned an invalid result page")
                 batch = data.get("jobs") or []
                 if not batch:
+                    if offset < int(data["hits"]):
+                        raise ValueError("Amazon pagination ended before the advertised total")
                     break
                 for j in batch:
                     jid = str(j.get("job_id") or j.get("id_icims") or "")
@@ -63,7 +64,9 @@ class AmazonProvider(Provider):
                     ))
                 total = int(data.get("hits") or 0)
                 offset += 100
-                if offset >= total or offset >= 500:  # cap 5 pages/query
+                if offset >= total:
                     break
                 time.sleep(0.4)
+            else:
+                raise RuntimeError("Amazon pagination safety limit reached; incomplete observation")
         return jobs
