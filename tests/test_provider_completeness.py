@@ -46,6 +46,14 @@ class CompletenessTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired): fetch_provider(GreenhouseProvider('x'), 'test', timeout=1)
             self.assertEqual(child.call_args.kwargs['timeout'], 1)
 
+    def test_workday_retains_first_page_total_when_later_totals_are_zero(self):
+        pages = [response({'total': 60 if page == 0 else 0,
+            'jobPostings': [{'title': f'Job {page * 20 + i}', 'externalPath': f'/job/{page * 20 + i}'}
+                            for i in range(20)]}) for page in range(3)]
+        with patch('jobradar.providers.workday.requests.post', side_effect=pages) as http:
+            self.assertEqual(len(WorkdayProvider('bostondynamics').fetch('test')), 60)
+            self.assertEqual(http.call_count, 3)
+
     def test_partial_run_writes_degraded_manifest_and_preserves_existing_jobs(self):
         good = types.SimpleNamespace(source='greenhouse', provider_slug='good')
         bad = types.SimpleNamespace(source='greenhouse', provider_slug='bad')
