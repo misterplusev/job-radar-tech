@@ -13,6 +13,11 @@ on:
         required: false
         default: manual
         type: string
+      full_refresh:
+        description: Rewrite stored descriptions for every posting (heavy; manual use only)
+        required: false
+        default: false
+        type: boolean
 
 # Cloudflare abet-jobs-scheduler owns the schedule; no second GitHub cron.
 concurrency:
@@ -35,11 +40,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Regression checks
         run: python -m unittest discover -s tests -v
-      - name: Apply additive schema
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: python db/apply_schema.py
+      # Schema is NOT applied here. Running DDL and a PostgREST schema reload before
+      # every scrape let a slow database block ingestion entirely (2026-11-11 outage).
+      # Apply schema changes deliberately with the manual apply-schema workflow.
       - name: Scrape, reconcile, and deliver pending notifications
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -47,6 +50,7 @@ jobs:
           DISCORD_WEBHOOK_JOBS: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
           JOBRADAR_TRIGGER: ${{ inputs.trigger_source || github.event_name }}
           JOBRADAR_SCHEDULER_SLOT: ${{ inputs.scheduler_slot }}
+          JOBRADAR_FULL_REFRESH: ${{ inputs.full_refresh && '1' || '' }}
         run: python -u run.py ingest
       - name: Render dashboard artifact
         if: ${{ !cancelled() }}
