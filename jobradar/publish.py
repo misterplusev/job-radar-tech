@@ -17,6 +17,7 @@ Tables (this module ONLY, tech namespaced):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -43,6 +44,20 @@ CHUNK_SIZE = 5
 POSTED_DAYS_MAX = 14
 PROVIDER_TIMEOUT = 120
 DISCORD_PACE_SECONDS = 2.1
+# Sending the full description and source_payload for every stored posting on
+# every run rewrote the whole table each time and overloaded the shared database
+# (2026-11-11). Each stored posting now carries a hash of its scraped content in
+# source_payload. A posting is rewritten in full only when that hash changes, so an
+# employer's edit is picked up on the next run; unchanged postings are refreshed
+# with TOUCH_COLUMNS only.
+TOUCH_COLUMNS = ("company", "title", "url", "location", "is_active", "closed_at",
+                 "last_seen_at", "scraped_at", "ats", "posted_at")
+HASH_KEY = "content_hash"
+HASH_FIELDS = ("title", "location", "description", "ats", "posted_at")
+# Postings stored before hashing existed have no hash yet. They are rewritten once,
+# at most this many per run, so the first runs after deployment stay small.
+BACKFILL_PER_RUN = 1500
+FULL_REFRESH = os.environ.get("JOBRADAR_FULL_REFRESH", "").strip() in ("1", "true", "True")
 BOARD_LOGOS_BASE = "https://misterplusev.github.io/jobradar-tech-board/logos"
 
 
@@ -90,26 +105,36 @@ def _rest(url_base: str, table: str) -> str:
 # --------------------------------------------------------------------------- #
 # persistence
 # --------------------------------------------------------------------------- #
-def fetch_existing_urls(url_base: str, key: str, company: str) -> Set[str]:
-    """All known urls for a company (paginated, 1000/page)."""
-    urls: Set[str] = set()
+def fetch_existing_state(url_base: str, key: str, company: str) -> Dict[str, dict]:
+    """Known url -> {is_active, hash} for a company (paginated, 1000/page)."""
+    state: Dict[str, dict] = {}
     offset = 0
     while True:
         r = requests.get(
             _rest(url_base, TABLE_JOBS),
             headers=_headers(key),
-            params={"company": f"eq.{company}", "select": "url", "limit": 1000, "offset": offset},
+            params={"company": f"eq.{company}",
+                    "select": f"url,is_active,{HASH_KEY}:source_payload->>{HASH_KEY}",
+                    "limit": 1000, "offset": offset},
             timeout=120,
         )
         r.raise_for_status()
         rows = r.json()
         if not rows:
             break
-        urls.update(row["url"] for row in rows if row.get("url"))
+        for row in rows:
+            if row.get("url"):
+                state[row["url"]] = {"is_active": bool(row.get("is_active", True)),
+                                     "hash": row.get(HASH_KEY) or None}
         if len(rows) < 1000:
             break
         offset += 1000
-    return urls
+    return state
+
+
+def fetch_existing_urls(url_base: str, key: str, company: str) -> Set[str]:
+    """All known urls for a company, active or not."""
+    return set(fetch_existing_state(url_base, key, company))
 
 
 def _deactivation_batches(url_base: str, company: str, urls: Set[str]):
@@ -408,6 +433,21 @@ def serialize(job) -> dict:
     return row
 
 
+def _touch_row(row: dict) -> dict:
+    """Tracking columns only, for a stored posting whose content is unchanged."""
+    return {k: row[k] for k in TOUCH_COLUMNS}
+
+
+def _content_hash(row: dict) -> str:
+    """Stable hash of what the employer published; ignores per-run bookkeeping."""
+    payload = {k: v for k, v in (row.get("source_payload") or {}).items()
+               if k not in ("run_id", HASH_KEY)}
+    basis = {k: row.get(k) for k in HASH_FIELDS}
+    basis["source_payload"] = payload
+    encoded = json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
+
+
 def retire_empty_sources(url_base, key, empty_providers):
     """Only sources verified empty are reconciled; active rows carry their source identity."""
     total = 0
@@ -434,13 +474,16 @@ def retire_empty_sources(url_base, key, empty_providers):
 def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
     """Full publish cycle for one scrape run: upsert -> deactivate -> announce."""
     url_base, key = supabase_env()
-    totals = {"upserted": 0, "deactivated": 0, "queued_candidates": 0, "delivered": 0}
+    totals = {"upserted": 0, "deactivated": 0, "queued_candidates": 0, "delivered": 0,
+              "written_new": 0, "written_changed": 0, "written_backfill": 0, "touched": 0}
+    backfill_budget = BACKFILL_PER_RUN
     grouped: Dict[str, list] = {}
     for job in jobs:
         grouped.setdefault(job.company, []).append(job)
 
     for company, company_jobs in grouped.items():
-        existing_urls = fetch_existing_urls(url_base, key, company)
+        existing = fetch_existing_state(url_base, key, company)
+        existing_urls = set(existing)
         seen: Set[str] = set()
         rows: List[dict] = []
         for job in company_jobs:
@@ -448,11 +491,37 @@ def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
             if row["url"] in seen:
                 continue
             seen.add(row["url"])
+            row["source_payload"][HASH_KEY] = _content_hash(row)
             rows.append(row)
-        totals["queued_candidates"] += queue_new_jobs(url_base, key, [r for r in rows if r["url"] not in existing_urls])
-        upsert(url_base, key, [r for r in rows if "description" in r])
-        upsert(url_base, key, [r for r in rows if "description" not in r])
-        removed = existing_urls - seen
+        new_rows = [r for r in rows if r["url"] not in existing_urls]
+        totals["queued_candidates"] += queue_new_jobs(url_base, key, new_rows)
+        # New postings and postings whose content changed are written in full.
+        # Unchanged postings only get their tracking columns refreshed.
+        full_rows = list(new_rows)
+        touch_rows: List[dict] = []
+        changed = backfilled = 0
+        for row in rows:
+            if row["url"] not in existing_urls:
+                continue
+            stored_hash = existing[row["url"]]["hash"]
+            if FULL_REFRESH or (stored_hash and stored_hash != row["source_payload"][HASH_KEY]):
+                full_rows.append(row)
+                changed += 1
+            elif not stored_hash and backfill_budget > 0:
+                full_rows.append(row)
+                backfilled += 1
+                backfill_budget -= 1
+            else:
+                touch_rows.append(row)
+        upsert(url_base, key, [r for r in full_rows if "description" in r])
+        upsert(url_base, key, [r for r in full_rows if "description" not in r])
+        upsert(url_base, key, [_touch_row(r) for r in touch_rows])
+        totals["written_new"] += len(new_rows)
+        totals["written_changed"] += changed
+        totals["written_backfill"] += backfilled
+        totals["touched"] += len(touch_rows)
+        # Only postings that are still marked active can newly disappear.
+        removed = {u for u, stored in existing.items() if stored["is_active"]} - seen
         deactivated = deactivate(url_base, key, company, removed) if allow_deactivate else 0
         totals["upserted"] += len(rows)
         totals["deactivated"] += deactivated
@@ -462,6 +531,8 @@ def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
 
     if allow_deactivate:
         totals["deactivated"] += retire_empty_sources(url_base, key, empty_providers)
+    print(f"[PUBLISH] full writes: {totals['written_new']} new, {totals['written_changed']} changed, "
+          f"{totals['written_backfill']} first-time hash; light refresh: {totals['touched']}")
     totals["delivered"] = notify_new_jobs([])
     return totals
 
