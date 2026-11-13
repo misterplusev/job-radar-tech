@@ -47,6 +47,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBRADAR_MODULE: tech
           DISCORD_WEBHOOK_JOBS: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
           JOBRADAR_TRIGGER: ${{ inputs.trigger_source || github.event_name }}
           JOBRADAR_SCHEDULER_SLOT: ${{ inputs.scheduler_slot }}

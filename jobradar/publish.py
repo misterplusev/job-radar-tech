@@ -4,16 +4,17 @@ Own implementation for the robotics module (independent of every other scraper
 module). Behavior contract:
 
   scrape  ->  group by company
-          ->  fetch existing tech_jobs urls (paginated)
+          ->  fetch existing robotics_jobs urls (paginated)
           ->  upsert new/seen rows (on_conflict=company,url, batched, retried)
           ->  deactivate urls that vanished from the provider (closed_at fallback)
+          ->  relevance-gate the announce (storage is NEVER filtered)
           ->  Discord-announce NEW jobs posted within POSTED_DAYS_MAX days
               (5-embed chunks, 429-aware retries, 0.5s spacing)
           ->  failure alerts to the same webhook
 
-Tables (this module ONLY, tech namespaced):
-  tech_jobs             postings
-  tech_job_scrape_runs  per-provider telemetry
+Tables (this module ONLY, robotics namespaced):
+  robotics_jobs             postings
+  robotics_job_scrape_runs  per-provider telemetry
 """
 from __future__ import annotations
 
@@ -27,22 +28,81 @@ from typing import Dict, List, Optional, Set
 import requests
 from requests import HTTPError, Timeout, ConnectionError
 
+try:  # the relevance filter ships only where a module uses it (robotics)
+    from .relevance import explain as _relevance_explain
+    from .relevance import is_relevant as _is_relevant
+except ImportError:  # no relevance module here (the tech repository) or an offline test harness
+    _relevance_explain = globals().get("_relevance_explain")
+    _is_relevant = globals().get("_is_relevant")
+
 DISCORD_WEBHOOK_JOBS = os.environ.get("DISCORD_WEBHOOK_JOBS", "").strip()
 DRY_RUN = False
 
 BASE_URL = "https://api.github.com"  # unused placeholder to keep module import-safe
-TABLE_JOBS = "tech_jobs"
-TABLE_NOTIFICATIONS = "tech_job_notifications"
-# Must match db/schema_tech.sql. This was hardcoded to the robotics table, so
-# every tech receipt was written into public.robotics_job_scrape_runs and the
-# tech telemetry table stayed permanently empty (verified: 0 rows in prod).
-# NOTE: the table really is lowercase. Postgres folds unquoted identifiers, so
-# `create table public.Tech_job_scrape_runs` created `tech_job_scrape_runs`.
-TABLE_RUNS = "tech_job_scrape_runs"
+
+# COMMON DISCORD SENDER
+# queue_new_jobs() -> notify_new_jobs() -> _send_notification_chunk() -> _ack_notifications()
+# is the one delivery path for ABET job modules: a durable row per job in the module's
+# notification table, sent with ?wait=true, acknowledged only with the Discord message ID.
+# JOBRADAR_MODULE selects which module this process delivers for. Exactly one process
+# may deliver for a module (workflow concurrency groups enforce it).
+DELIVERY_MODULES = {
+    "robotics": {
+        "jobs_table": "robotics_jobs", "notifications_table": "robotics_job_notifications",
+        "runs_table": "robotics_job_scrape_runs", "label": "robotics", "color": 0x34D399,
+        "footer": "ABET Robotics Jobs Monitor", "default_title": "New robotics job posting",
+        "default_description": "New robotics job discovered.", "posted_field": False,
+        "payload_logo": False, "record_destination": False,
+        "logo_base": "https://misterplusev.github.io/robotics-jobradar-board/logos",
+        "relevance_filter": True, "failure_title": "Robotics",
+        # Robotics announces only postings dated within POSTED_DAYS_MAX days (existing behaviour).
+        "expire_old_postings": True,
+    },
+    # Tech is the same pipeline as robotics with its own tables, board and wording, and no
+    # relevance filter. This file is byte-identical in misterplusev/job-radar-tech; a test in
+    # each repository pins its hash so the two copies cannot drift.
+    "tech": {
+        "jobs_table": "tech_jobs", "notifications_table": "tech_job_notifications",
+        "runs_table": "tech_job_scrape_runs", "label": "tech", "color": 0x34D399,
+        "footer": "ABET Tech Jobs Monitor", "default_title": "New tech job posting",
+        "default_description": "New tech job discovered.", "posted_field": False,
+        "payload_logo": False, "record_destination": False,
+        "logo_base": "https://misterplusev.github.io/jobradar-tech-board/logos",
+        "relevance_filter": False, "failure_title": "Tech",
+        "expire_old_postings": True,
+    },
+    # Sportsbook jobs are scraped on a Hugging Face Space, which cannot reach Discord.
+    # The Space queues rows in sportsbook_job_notifications; `run.py deliver` drains them here.
+    "sportsbook": {
+        "jobs_table": "jobs", "notifications_table": "sportsbook_job_notifications",
+        "runs_table": "job_scrape_runs", "label": "sportsbook", "color": 0x38BDF8,
+        "footer": "ABET Sportsbook Jobs Monitor", "default_title": "New job posting",
+        "default_description": "New sportsbook job discovered.", "posted_field": True,
+        "payload_logo": True, "record_destination": True,
+        "logo_base": "", "relevance_filter": False, "failure_title": "Sportsbook",
+        # The sportsbook sender this replaces announces EVERY new active job, whatever its
+        # posting date. Keep that: nothing is dropped for age.
+        "expire_old_postings": False,
+    },
+}
+MODULE_NAME = os.environ.get("JOBRADAR_MODULE", "robotics").strip() or "robotics"
+if MODULE_NAME not in DELIVERY_MODULES:
+    raise RuntimeError(f"Unknown JOBRADAR_MODULE {MODULE_NAME!r}")
+MODULE = DELIVERY_MODULES[MODULE_NAME]
+TABLE_JOBS = MODULE["jobs_table"]
+TABLE_NOTIFICATIONS = MODULE["notifications_table"]
+TABLE_RUNS = MODULE["runs_table"]
+LAST_DESTINATION: dict = {}
 BATCH_SIZE = 100
 CHUNK_SIZE = 5
 POSTED_DAYS_MAX = 14
 PROVIDER_TIMEOUT = 120
+BOARD_LOGOS_BASE = MODULE["logo_base"]
+RELEVANCE_ON = (MODULE["relevance_filter"] and _is_relevant is not None
+                and os.environ.get("DISCORD_RELEVANCE_FILTER", "1").strip() not in ("0", "false", "False"))
+SUPPRESS_SAMPLE = 5
+# Discord webhooks are capped at ~30 requests/minute; pace chunks so a big
+# backlog announce stays under the limit instead of hammering 429s.
 DISCORD_PACE_SECONDS = 2.1
 # Sending the full description and source_payload for every stored posting on
 # every run rewrote the whole table each time and overloaded the shared database
@@ -63,7 +123,6 @@ HASH_FIELDS = ("title", "location", "description", "ats", "posted_at")
 # at most this many per run, so the first runs after deployment stay small.
 BACKFILL_PER_RUN = 1500
 FULL_REFRESH = os.environ.get("JOBRADAR_FULL_REFRESH", "").strip() in ("1", "true", "True")
-BOARD_LOGOS_BASE = "https://misterplusev.github.io/jobradar-tech-board/logos"
 
 
 def _logo_url(company: Optional[str]) -> Optional[str]:
@@ -249,30 +308,69 @@ def _embed(job: dict) -> dict:
     if len(description) > 350:
         description = description[:347] + "..."
     embed = {
-        "title": (job.get("title") or "New tech job posting")[:256],
+        "title": (job.get("title") or MODULE["default_title"])[:256],
         "url": (job.get("url") or "")[:2048] or None,
-        "description": description or "New tech job discovered.",
-        "color": 0x34D399,
+        "description": description or MODULE["default_description"],
+        "color": MODULE["color"],
         "fields": [
             {"name": "Company", "value": (job.get("company") or "Unknown")[:256], "inline": True},
             {"name": "Location", "value": (job.get("location") or "Unknown")[:1024], "inline": True},
         ],
-        "footer": {"text": "ABET Tech Jobs Monitor"},
-        "timestamp": job.get("posted_at") or job.get("scraped_at") or now_iso(),
+        "footer": {"text": MODULE["footer"]},
+        "timestamp": _embed_timestamp(job),
     }
     ats = job.get("ats")
     if ats:
         embed["fields"].insert(0, {"name": "Source", "value": str(ats)[:256], "inline": True})
-    thumb = _logo_url(job.get("company"))
+    if MODULE["posted_field"] and job.get("posted_at"):
+        embed["fields"].append({"name": "Posted", "value": str(job["posted_at"])[:256], "inline": True})
+    thumb = job.get("logo_url") if MODULE["payload_logo"] else _logo_url(job.get("company"))
     if thumb:
         embed["thumbnail"] = {"url": thumb}
     return embed
 
 
+def _embed_timestamp(job: dict) -> str:
+    """Discord rejects the whole message for a non-ISO8601 timestamp. Robotics passes
+    its stored value through as before; other modules normalise date-only values."""
+    value = job.get("posted_at") or job.get("scraped_at") or now_iso()
+    if MODULE_NAME == "robotics":
+        return value
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return now_iso()
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def _split_relevant(jobs: List[dict]) -> tuple[List[dict], List[dict]]:
+    """Partition new postings into (announce, suppress). Storage is untouched.
+
+    Kill switch: DISCORD_RELEVANCE_FILTER=0 restores the old announce-everything
+    behavior without a code change.
+    """
+    if not RELEVANCE_ON:
+        return list(jobs), []
+    keep: List[dict] = []
+    drop: List[dict] = []
+    for j in jobs:
+        (keep if _is_relevant(j.get("title"), j.get("description"), j.get("company")) else drop).append(j)
+    if drop:
+        print(f"[RELEVANCE] suppressed {len(drop)} non-{MODULE['label']} postings ({len(keep)} kept)")
+        for job in drop[:SUPPRESS_SAMPLE]:
+            _, reason = _relevance_explain(job.get("title"), job.get("description"), job.get("company"))
+            print(f"[RELEVANCE]   - {job.get('company')}: {(job.get('title') or '')[:70]} ({reason})")
+        if len(drop) > SUPPRESS_SAMPLE:
+            print(f"[RELEVANCE]   ... and {len(drop) - SUPPRESS_SAMPLE} more")
+    return keep, drop
+
+
 def queue_new_jobs(url_base: str, key: str, new_jobs: List[dict]) -> int:
     """Persist intent BEFORE job upsert; conflicts preserve prior delivery state."""
     recent = [j for j in new_jobs if _is_recently_posted(j.get("posted_at"))]
-    # Tech preserves its existing date-only notification eligibility.
+    recent, _suppressed = _split_relevant(recent)
     if DRY_RUN:
         return len(recent)
     headers = dict(_headers(key), Prefer="resolution=ignore-duplicates")
@@ -285,21 +383,37 @@ def queue_new_jobs(url_base: str, key: str, new_jobs: List[dict]) -> int:
     return len(recent)
 
 
-def _send_notification_chunk(jobs: List[dict]) -> str:
-    payload = {"content": f"New tech jobs discovered: {len(jobs)}",
-               "embeds": [_embed(j) for j in jobs]}
+def send_discord_message(webhook: str, payload: dict, *, headers: Optional[dict] = None) -> dict:
+    """THE one function that posts a job message to Discord, for every ABET jobs module
+    (robotics, tech and sportsbook through notify_new_jobs below; sports teams calls it from
+    sports_teams/publish_teams.py).
+
+    `?wait=true` makes Discord answer with the stored message. Returns that message (it
+    carries `id`, `channel_id`, `webhook_id`). Waits out HTTP 429 using Discord's
+    `retry_after`, at most 8 attempts. Raises if Discord refuses the message or returns no
+    message ID, so a caller can never record a delivery that Discord did not confirm.
+    """
     for attempt in range(8):
-        response = requests.post(DISCORD_WEBHOOK_JOBS, params={"wait": "true"},
-                                 json=payload, timeout=30)
+        response = requests.post(webhook, params={"wait": "true"}, json=payload, timeout=30,
+                                 **({"headers": headers} if headers else {}))
         if response.status_code == 429 and attempt < 7:
             time.sleep(_discord_retry_after(response))
             continue
         response.raise_for_status()
-        message_id = response.json().get("id")
-        if not message_id:
+        body = response.json()
+        if not body.get("id"):
             raise RuntimeError("Discord did not return a delivery message ID")
-        return str(message_id)
+        return body
     raise RuntimeError("Discord retries exhausted")
+
+
+def _send_notification_chunk(jobs: List[dict]) -> str:
+    payload = {"content": f"New {MODULE['label']} jobs discovered: {len(jobs)}",
+               "embeds": [_embed(j) for j in jobs]}
+    body = send_discord_message(DISCORD_WEBHOOK_JOBS, payload)
+    LAST_DESTINATION.clear()
+    LAST_DESTINATION.update(channel_id=body.get("channel_id"), webhook_id=body.get("webhook_id"))
+    return str(body["id"])
 
 
 def _ack_notifications(url_base: str, key: str, ids: List[int], state: str,
@@ -307,6 +421,9 @@ def _ack_notifications(url_base: str, key: str, ids: List[int], state: str,
     payload = {"state": state}
     if state == "delivered":
         payload.update(delivered_at=now_iso(), discord_message_id=message_id)
+        if MODULE["record_destination"]:
+            payload.update(discord_channel_id=LAST_DESTINATION.get("channel_id"),
+                           discord_webhook_id=LAST_DESTINATION.get("webhook_id"))
     response = requests.patch(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
                               params={"id": "in.(" + ",".join(str(i) for i in ids) + ")",
                                       "state": "eq.pending"}, json=payload, timeout=60)
@@ -344,7 +461,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> int:
                 break
             cursor = item["id"]
             job = item["payload"]
-            if not _is_recently_posted(job.get("posted_at")):
+            if MODULE["expire_old_postings"] and not _is_recently_posted(job.get("posted_at")):
                 _ack_notifications(url_base, key, [item["id"]], "expired")
                 continue
             # An interrupted queue-before-upsert must never announce an unsaved job.
@@ -375,7 +492,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> int:
             _ack_notifications(url_base, key, [r["id"] for r in ready], "delivered", message_id)
             delivered += len(ready)
             time.sleep(DISCORD_PACE_SECONDS)
-    print(f"[DISCORD] Confirmed {delivered} delivered tech jobs; other pending jobs remain queued")
+    print(f"[DISCORD] Confirmed {delivered} delivered {MODULE['label']} jobs; other pending jobs remain queued")
     return delivered
 
 
@@ -383,15 +500,15 @@ def notify_failure(error_message: str) -> None:
     if not DISCORD_WEBHOOK_JOBS:
         return
     embed = {
-        "title": "Tech Scrape Failed",
+        "title": f"{MODULE['failure_title']} Scrape Failed",
         "description": f"```\n{error_message[:1500]}\n```",
         "color": 0xFF0055,
-        "footer": {"text": "ABET Tech Jobs Monitor"},
+        "footer": {"text": MODULE["footer"]},
         "timestamp": now_iso(),
     }
     try:
         requests.post(DISCORD_WEBHOOK_JOBS,
-                      json={"content": "@here Tech scrape failure", "embeds": [embed]}, timeout=30)
+                      json={"content": f"@here {MODULE['failure_title']} scrape failure", "embeds": [embed]}, timeout=30)
     except Exception:  # noqa: BLE001
         pass
 
@@ -400,7 +517,7 @@ def notify_failure(error_message: str) -> None:
 # orchestration
 # --------------------------------------------------------------------------- #
 def serialize(job) -> dict:
-    """Job contract row -> tech_jobs row (one description copy; source_payload holds small fields only).
+    """Job contract row -> robotics_jobs row (one description copy; source_payload holds small fields only).
 
     Empty description fields are OMITTED so the merge-upsert keeps existing
     descriptions instead of wiping them (content-less boards, e.g. greenhouse
