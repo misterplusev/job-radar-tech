@@ -126,6 +126,31 @@ class WriteVolumeTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn('description', rows[0])
 
+    def test_description_is_stored_once(self):
+        # source_payload must never carry description copies again (database size).
+        ns, db = load_publisher(MODULES[0])
+        job = make_job(1)
+        job.description_raw = '<p>raw html</p>'
+        job.description_clean = 'clean text'
+        row = ns['serialize'](job)
+        self.assertNotIn('description_raw', row['source_payload'])
+        self.assertNotIn('description_clean', row['source_payload'])
+        self.assertEqual(row['description'], 'Operations')
+        self.assertEqual(ns['HASH_KEY'], 'content_hash_v2')
+        _, rows = publish_and_capture(ns, db, [job])
+        self.assertNotIn('description_raw', rows[0]['source_payload'])
+
+    def test_rows_hashed_by_the_old_key_go_through_the_capped_backfill(self):
+        ns, db = load_publisher(MODULES[0])
+        jobs = [make_job(i) for i in range(3)]
+        ns['publish'](jobs)
+        for row in db.jobs.values():  # as stored by the code before v2
+            row['source_payload']['content_hash'] = row['source_payload'].pop(ns['HASH_KEY'])
+        ns['BACKFILL_PER_RUN'] = 2
+        totals, rows = publish_and_capture(ns, db, jobs)
+        self.assertEqual((totals['written_backfill'], totals['written_changed'], totals['touched']), (2, 0, 1))
+        self.assertEqual(sum('description' in r for r in rows), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

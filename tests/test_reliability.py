@@ -50,8 +50,8 @@ class Database:
                              and r['id'] > cursor][:params['limit']])
         company = params['company'][3:]
         rows = [v for (c, _), v in self.jobs.items() if c == company]
-        # Mirrors the REST alias content_hash:source_payload->>content_hash.
-        rows = [dict(r, content_hash=(r.get('source_payload') or {}).get('content_hash')) for r in rows]
+        # Mirrors the REST alias <HASH_KEY>:source_payload->><HASH_KEY>.
+        rows = [dict(r, content_hash_v2=(r.get('source_payload') or {}).get('content_hash_v2')) for r in rows]
         if 'url' in params:
             rows = [r for r in rows if r['url'] == params['url'][3:]]
         offset = params.get('offset', 0)
