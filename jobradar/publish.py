@@ -52,7 +52,12 @@ DISCORD_PACE_SECONDS = 2.1
 # with TOUCH_COLUMNS only.
 TOUCH_COLUMNS = ("company", "title", "url", "location", "is_active", "closed_at",
                  "last_seen_at", "scraped_at", "ats", "posted_at")
-HASH_KEY = "content_hash"
+# v2 (2026-11-12): source_payload no longer carries description_raw and
+# description_clean. Those two copies were two-thirds of the table and pushed the
+# shared free database past its 500 MB limit. The key was renamed so every stored
+# row counts as "no hash yet" and is rewritten through the capped backfill below
+# (BACKFILL_PER_RUN per run) instead of all at once.
+HASH_KEY = "content_hash_v2"
 HASH_FIELDS = ("title", "location", "description", "ats", "posted_at")
 # Postings stored before hashing existed have no hash yet. They are rewritten once,
 # at most this many per run, so the first runs after deployment stay small.
@@ -395,7 +400,7 @@ def notify_failure(error_message: str) -> None:
 # orchestration
 # --------------------------------------------------------------------------- #
 def serialize(job) -> dict:
-    """Job contract row -> tech_jobs row (source_payload keeps raw/clean).
+    """Job contract row -> tech_jobs row (one description copy; source_payload holds small fields only).
 
     Empty description fields are OMITTED so the merge-upsert keeps existing
     descriptions instead of wiping them (content-less boards, e.g. greenhouse
@@ -414,10 +419,10 @@ def serialize(job) -> dict:
         "posted_at": job.posted_at,
     }
     if job.description or job.description_raw or job.description_clean:
-        row["description"] = job.description
+        # ONE copy of the description. Do not add description_raw/description_clean
+        # back into source_payload: nothing reads them and they tripled the table.
+        row["description"] = job.description or job.description_clean or ""
         row["source_payload"] = {
-            "description_raw": job.description_raw,
-            "description_clean": job.description_clean,
             "provider_slug": job.provider_slug,
             "run_id": job.run_id,
             "salary": job.salary,
