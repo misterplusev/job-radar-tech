@@ -3,9 +3,10 @@
 
 What happened: the schedule was changed from a few runs a day to every hour for three
 scrapers at once, every run rewrote every stored row, and every run applied the schema and
-reloaded the REST API's schema cache. The shared FREE Supabase database (about 0.4 GB of
-memory, 500 MB size limit) could not keep up and the REST API went down for 36 hours,
-taking all four job scrapers and their boards with it.
+reloaded the REST API's schema cache. The shared FREE Supabase database (411 MB of memory,
+500 MB size limit) could not keep up: its REST API was down November 11 21:18 to November 12
+05:18 UTC and again November 12 15:09 to November 13 02:58 UTC, taking all four job scrapers
+and their boards with it.
 
 If one of these tests fails, do not edit the test to make it pass. Read
 docs/job-scrapers/RUNBOOK.md ("Limits you must not cross") first.
