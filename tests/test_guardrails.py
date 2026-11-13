@@ -11,6 +11,7 @@ and their boards with it.
 If one of these tests fails, do not edit the test to make it pass. Read
 docs/job-scrapers/RUNBOOK.md ("Limits you must not cross") first.
 """
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -82,6 +83,23 @@ class WriteVolumeLimits(unittest.TestCase):
         self.assertLessEqual(budget, 1500, f'BACKFILL_PER_RUN={budget} rewrites too many rows per run. {RUNBOOK}')
         self.assertNotIn('"description_raw": job.description_raw', text, f'Descriptions are stored once. {RUNBOOK}')
         self.assertIn('TOUCH_COLUMNS', text, f'Unchanged rows must get the light refresh, not a full rewrite. {RUNBOOK}')
+
+
+class CommonSenderFile(unittest.TestCase):
+    """jobradar/publish.py is the ONE sender file for robotics, tech and sportsbook, and holds the
+    send function sports teams uses. misterplusev/job-radar and misterplusev/job-radar-tech carry
+    byte-identical copies. If you change it, change it in BOTH repositories and update this hash
+    in BOTH guardrail files in the same commits; otherwise this test stops every scrape."""
+    COMMON_SENDER_SHA256 = 'bd2e09c861ee18fdd3b4f1b180e6c1a8049148f9333c0861a04b62c2bb05e7da'
+
+    def test_sender_file_is_the_pinned_common_one(self):
+        data = (ROOT / 'jobradar' / 'publish.py').read_bytes().replace(b'\r\n', b'\n')
+        self.assertEqual(hashlib.sha256(data).hexdigest(), self.COMMON_SENDER_SHA256,
+                         'jobradar/publish.py differs from the pinned common sender. ' + RUNBOOK)
+
+    def test_this_repository_names_its_module(self):
+        text = (ROOT / '.github' / 'workflows' / 'pipeline.yml').read_text(encoding='utf-8')
+        self.assertIn('JOBRADAR_MODULE: tech', text, 'pipeline.yml must select this repository\'s module. ' + RUNBOOK)
 
 
 if __name__ == '__main__':

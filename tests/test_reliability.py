@@ -110,7 +110,9 @@ def load_publisher(module):
     tree.body = [n for n in tree.body if not (isinstance(n, ast.ImportFrom) and n.level)]
     ns = {'__name__': 'offline_publisher', '_is_relevant': lambda *a: True,
           '_relevance_explain': lambda *a: (True, 'test')}
-    exec(compile(tree, str(path), 'exec'), ns)
+    # JOBRADAR_MODULE selects the module's tables and wording when the file is loaded.
+    with patch.dict('os.environ', {'JOBRADAR_MODULE': module}):
+        exec(compile(tree, str(path), 'exec'), ns)
     db = Database(module)
     ns.update(requests=db, DISCORD_WEBHOOK_JOBS='https://offline.invalid/discord',
               supabase_env=lambda: ('https://offline.invalid', 'fake'),
