@@ -1,0 +1,36 @@
+name: cloud-recovery-proof
+on:
+  push:
+    branches: [codex/recovery-proof-20261114]
+  workflow_dispatch:
+concurrency:
+  group: cloud-recovery-proof
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Regression and failure recovery tests (fake external HTTP)
+        run: python -m unittest discover -s tests -v
+      - name: Read the actual existing tech Discord message
+        if: ${{ !cancelled() }}
+        env:
+          PROOF_MODULE: tech
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_WEBHOOK_JOBS: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
+        run: python runtime/verification/read_discord.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: cloud-recovery-proof
+          path: proof/
+          retention-days: 14
