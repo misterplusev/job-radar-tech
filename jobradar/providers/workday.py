@@ -38,7 +38,7 @@ _RETRY_STATUS = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
 _PAGE_ATTEMPTS = 3
 
 
-def _page(url, payload):
+def _fetch_page(url, payload):
     """Retry the same read-only CXS search page; never turn an error into [].
 
     Workday sometimes returns a 521 or a successful HTTP response containing HTML
@@ -98,7 +98,7 @@ class WorkdayProvider(Provider):
         offset = 0
         expected_total = None
         for _page in range(50):
-            data = _page(
+            data = _fetch_page(
                 f"https://{host}/wday/cxs/{self.slug}/{site}/jobs",
                 {"limit": 20, "offset": offset, "searchText": ""},
             )
