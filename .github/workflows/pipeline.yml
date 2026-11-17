@@ -66,4 +66,6 @@ jobs:
           path: |
             out/dashboard.html
             data/runtime/latest_manifest.json
+            data/runtime/workday-http/*.jsonl
           if-no-files-found: warn
+          retention-days: 7

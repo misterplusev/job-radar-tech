@@ -1,66 +1,54 @@
-"""Reproduce the November 14 failures without contacting employer sites."""
+"""Provider integration: fake HTTP and clocks; run only in cloud CI."""
+import io
+import json
+import tempfile
 import unittest
-from unittest.mock import patch
-import requests
-from jobradar.providers.workday import WorkdayProvider
-
-
-class Response:
-    def __init__(self, status=200, data=None, malformed=False, headers=None):
-        self.status_code, self.data, self.malformed = status, data, malformed
-        self.headers = headers or {'Content-Type': 'text/html' if malformed else 'application/json'}
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f'HTTP {self.status_code}', response=self)
-    def json(self):
-        if self.malformed:
-            raise ValueError('not JSON')
-        return self.data
-
+from pathlib import Path
+from contextlib import redirect_stderr
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from jobradar.providers import workday
+from jobradar import workday_http as http
+from test_workday_http import Clock, response
 
 def page(start=0, total=1, count=1):
-    return Response(data={'total': total, 'jobPostings': [
-        {'title': f'Job {i}', 'externalPath': f'/job/{i}'} for i in range(start, start + count)]})
-
+    return response(body={"total": total, "jobPostings": [
+        {"title": f"Job {i}", "externalPath": f"/job/{i}"} for i in range(start, start+count)]})
 
 class WorkdayRecovery(unittest.TestCase):
-    @patch('jobradar.providers.workday.time.sleep')
-    def test_521_then_non_json_then_success_retries_identical_page(self, sleep):
-        with patch('jobradar.providers.workday.requests.post', side_effect=[Response(521), Response(malformed=True), page()]) as post:
-            self.assertEqual(len(WorkdayProvider('bostondynamics').fetch('test')), 1)
-        self.assertEqual(post.call_args_list[0], post.call_args_list[1])
-        self.assertEqual(post.call_args_list[1], post.call_args_list[2])
-        self.assertEqual([c.args[0] for c in sleep.call_args_list], [1, 2])
-
-    @patch('jobradar.providers.workday.time.sleep')
-    def test_second_page_retry_keeps_first_page_and_has_no_duplicates(self, sleep):
-        with patch('jobradar.providers.workday.requests.post', side_effect=[page(0, 40, 20), requests.Timeout(), page(20, 0, 20)]) as post:
-            jobs = WorkdayProvider('rockwellautomation').fetch('test')
+    def setUp(self):
+        http._HOSTS.clear()
+        self.clock, self.events = Clock(), []
+    def run_provider(self, replies):
+        send = Mock(side_effect=replies)
+        client = http.WorkdayHTTP(send, source="test", deadline=self.clock()+175,
+             clock=self.clock, sleep=self.clock.sleep, jitter=lambda: 0, logger=self.events.append)
+        with patch.object(workday, "_new_client", return_value=client):
+            jobs = workday.WorkdayProvider("bostondynamics").fetch("test")
+        return jobs, send
+    def test_recovery_does_not_duplicate_first_page(self):
+        jobs, send = self.run_provider([page(0,40,20), response(429), page(20,0,20)])
         self.assertEqual(len({j.url for j in jobs}), 40)
-        self.assertEqual([c.kwargs['json']['offset'] for c in post.call_args_list], [0, 20, 20])
-
-    @patch('jobradar.providers.workday.time.sleep')
-    def test_exhaustion_raises_instead_of_returning_partial_data(self, sleep):
-        with patch('jobradar.providers.workday.requests.post', side_effect=[page(0, 40, 20)] + [Response(malformed=True)] * 3):
-            with self.assertRaisesRegex(RuntimeError, 'offset=20 failed after 3 attempts'):
-                WorkdayProvider('autostore').fetch('test')
-
-    @patch('jobradar.providers.workday.time.sleep')
-    def test_rate_limit_wait_is_honored_and_bounded(self, sleep):
-        with patch('jobradar.providers.workday.requests.post', side_effect=[Response(429, headers={'Retry-After': '7'}), page()]):
-            WorkdayProvider('autostore').fetch('test')
-        sleep.assert_called_once_with(7)
-        with patch('jobradar.providers.workday.requests.post', return_value=Response(429, headers={'Retry-After': '120'})) as post:
-            with self.assertRaisesRegex(RuntimeError, 'retry budget'):
-                WorkdayProvider('autostore').fetch('test')
-            self.assertEqual(post.call_count, 1)
-
-    def test_auth_or_schema_errors_are_not_retried_or_hidden(self):
-        for response, error in [(Response(403), requests.HTTPError), (Response(data={'error':'denied'}), ValueError), (Response(data=[]), ValueError)]:
-            with self.subTest(response=response), patch('jobradar.providers.workday.requests.post', return_value=response) as post:
-                with self.assertRaises(error): WorkdayProvider('bostondynamics').fetch('test')
-                self.assertEqual(post.call_count, 1)
-
-    def test_verified_empty_is_valid(self):
-        with patch('jobradar.providers.workday.requests.post', return_value=page(total=0, count=0)):
-            self.assertEqual(WorkdayProvider('bostondynamics').fetch('test'), [])
+        self.assertEqual([c.kwargs["json"]["offset"] for c in send.call_args_list], [0,20,20])
+    def test_failed_later_page_does_not_return_partial_source(self):
+        with self.assertRaises(http.WorkdayDeferred):
+            self.run_provider([page(0,40,20)] + [response(429)]*5)
+    def test_missing_schema_and_early_empty_fail(self):
+        for replies in ([response(body={"error":"denied"})], [page(0,40,20), page(20,0,0)]):
+            with self.subTest(replies=replies), self.assertRaises(ValueError):
+                self.run_provider(replies)
+            http._HOSTS.clear()
+    def test_verified_empty_remains_valid(self):
+        jobs, _ = self.run_provider([page(0,0,0)])
+        self.assertEqual(jobs, [])
+    def test_recovered_child_diagnostics_are_forwarded(self):
+        from jobradar.fetch_worker import fetch_provider
+        def complete(args, **kwargs):
+            Path(args[-1]).write_text("[]")
+            self.assertIn("WORKDAY_SOURCE_SECONDS", kwargs["env"])
+            return SimpleNamespace(returncode=0, stderr='[WORKDAY_HTTP] {"decision":"retry"}\n')
+        captured = io.StringIO()
+        provider = SimpleNamespace(source="workday", slug="bostondynamics")
+        with patch("jobradar.fetch_worker.subprocess.run", side_effect=complete), redirect_stderr(captured):
+            self.assertEqual(fetch_provider(provider, "test"), [])
+        self.assertIn('"decision":"retry"', captured.getvalue())

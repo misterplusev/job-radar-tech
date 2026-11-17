@@ -14,14 +14,28 @@ from jobradar.providers.lever import LeverProvider
 from jobradar.providers.ashby import AshbyProvider
 from jobradar.providers.amazon import AmazonProvider
 from jobradar.providers.workday import WorkdayProvider
+from jobradar.providers import workday
+from jobradar import workday_http as http
+from test_workday_http import Clock
 from jobradar.fetch_worker import fetch_provider
 from jobradar import publish
 import run
 
 def response(data):
-    return types.SimpleNamespace(json=lambda: data, raise_for_status=lambda: None)
+    return types.SimpleNamespace(status_code=200, headers={}, content=b'', json=lambda: data, raise_for_status=lambda: None)
 
 class CompletenessTests(unittest.TestCase):
+    def setUp(self):
+        http._HOSTS.clear()
+        clock = Clock()
+        def client(source):
+            return http.WorkdayHTTP(lambda method, url, **kw: workday.requests.post(url, **kw),
+                source=source, deadline=clock()+175, clock=clock, sleep=clock.sleep,
+                jitter=lambda: 0, logger=lambda event: None)
+        patcher = patch('jobradar.providers.workday._new_client', side_effect=client)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_http_errors_never_become_successful_empty_boards(self):
         for name, provider in [('greenhouse', GreenhouseProvider('x')), ('lever', LeverProvider('x')), ('ashby', AshbyProvider('x'))]:
             with self.subTest(provider=name), patch(f'jobradar.providers.{name}.http_get', side_effect=RuntimeError('HTTP failed')):
