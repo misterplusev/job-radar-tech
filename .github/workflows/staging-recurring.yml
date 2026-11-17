@@ -1,0 +1,74 @@
+name: isolated-job-staging
+run-name: staging ${{ inputs.module }} ${{ inputs.slot }}
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: Staging module assigned by the isolated controller
+        required: true
+        type: choice
+        options: [robotics, tech, sports_teams, sportsbook]
+      slot:
+        description: Staging UTC slot
+        required: true
+        type: string
+      lease_id:
+        description: Active durable staging lease
+        required: true
+        type: string
+      source_sha:
+        description: Exact candidate revision authorized by the staging controller
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: isolated-staging-${{ inputs.module }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: misterplusev/job-radar
+          ref: codex/recurring-staging-20261117
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install candidate dependencies
+        env:
+          STAGING_MODULE: ${{ inputs.module }}
+        run: |
+          case "$STAGING_MODULE" in
+            sportsbook) pip install -r candidate/scripts/requirements.txt ;;
+            sports_teams) pip install -r candidate/requirements.txt -r candidate/sports_teams/requirements.txt ;;
+            robotics|tech) pip install -r candidate/requirements.txt ;;
+            *) exit 2 ;;
+          esac
+          echo "STAGING_BUILD=$(git -C harness rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Execute isolated lease and persist staging result
+        env:
+          STAGING_MODULE: ${{ inputs.module }}
+          STAGING_LEASE_ID: ${{ inputs.lease_id }}
+          STAGING_SOURCE_DIR: ${{ github.workspace }}/candidate
+          STAGING_CONTROL_URL: https://abet-jobs-staging.abetscrape.workers.dev
+          STAGING_REPORT_URL: https://abet-jobs-staging.abetscrape.workers.dev/report
+          STAGING_REPORT_TOKEN: ${{ secrets.ABET_JOBS_STAGING_REPORT_TOKEN }}
+        run: python -u harness/runtime/staging/runner/ci_run.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: staging-${{ inputs.module }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/staging-result.json
+            /tmp/staging-diagnostics/data/runtime/workday-http/*.jsonl
+          retention-days: 7
