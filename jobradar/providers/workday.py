@@ -15,6 +15,7 @@ from typing import List
 
 from .base import Provider
 from ..models import Job, clean_ws
+from ..workday_http import WorkdayHTTP
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
@@ -34,51 +35,13 @@ _BOARD_NAMES = {
     "rockwellautomation": "Rockwell Automation",
 }
 
-_RETRY_STATUS = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
-_PAGE_ATTEMPTS = 3
+def _new_client(source):
+    return WorkdayHTTP(lambda method, url, **kw: requests.post(url, **kw), source=source)
 
 
-def _fetch_page(url, payload):
-    """Retry the same read-only CXS search page; never turn an error into [].
-
-    Workday sometimes returns a 521 or a successful HTTP response containing HTML
-    instead of JSON. The provider process still has its 180-second hard deadline.
-    Only transport failures, selected transient statuses and JSON decoding retry.
-    Valid JSON with an invalid schema is a source failure, not an empty board.
-    """
-    reason = "unknown response"
-    for attempt in range(1, _PAGE_ATTEMPTS + 1):
-        response = None
-        try:
-            response = requests.post(url, headers=_HEADERS, json=payload, timeout=(10, 25))
-            response.raise_for_status()
-            try:
-                return response.json()
-            except ValueError:
-                reason = "non-JSON response"
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            reason = type(exc).__name__
-        except requests.HTTPError:
-            if response is None or response.status_code not in _RETRY_STATUS:
-                raise
-            reason = f"HTTP {response.status_code}"
-        headers = getattr(response, "headers", {}) or {}
-        context = (f"status={getattr(response, 'status_code', 'transport')} "
-                   f"content_type={headers.get('Content-Type', 'unknown')[:80]} "
-                   f"cf_ray={headers.get('CF-Ray', 'none')[:80]}")
-        if attempt == _PAGE_ATTEMPTS:
-            raise RuntimeError(f"Workday page offset={payload['offset']} failed after "
-                               f"{attempt} attempts: {reason}; {context}")
-        delay = float(2 ** (attempt - 1))
-        try:
-            delay = max(delay, float(headers.get('Retry-After', 0)))
-        except (TypeError, ValueError):
-            pass
-        if delay > 30:
-            raise RuntimeError("Workday Retry-After exceeds the bounded page retry budget")
-        print(f"[workday retry] offset={payload['offset']} attempt={attempt} "
-              f"reason={reason} {context} wait={delay}s", file=sys.stderr, flush=True)
-        time.sleep(delay)
+def _fetch_page(url, payload, client=None):
+    client = client or _new_client("workday")
+    return client.request("POST", url, headers=_HEADERS, json=payload).json()
 
 
 class WorkdayProvider(Provider):
@@ -97,10 +60,12 @@ class WorkdayProvider(Provider):
         seen = set()
         offset = 0
         expected_total = None
+        client = _new_client(f"workday:{self.slug}")
         for _page in range(50):
             data = _fetch_page(
                 f"https://{host}/wday/cxs/{self.slug}/{site}/jobs",
                 {"limit": 20, "offset": offset, "searchText": ""},
+                client=client,
             )
             if not isinstance(data, dict) or not isinstance(data.get("jobPostings"), list) or "total" not in data:
                 raise ValueError("Workday returned an invalid result page")

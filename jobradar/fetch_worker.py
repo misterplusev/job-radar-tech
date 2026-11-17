@@ -19,10 +19,17 @@ def fetch_provider(provider, run_id: str, timeout: int = 180):
         environment = {k: v for k, v in os.environ.items()
                        if not k.startswith(("SUPABASE_", "DISCORD_", "ANTHROPIC_"))
                        and k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+        environment["WORKDAY_SOURCE_SECONDS"] = str(max(0.01, timeout - 5))
         result = subprocess.run([sys.executable, "-m", "jobradar.fetch_worker",
                                  str(request_file), str(output_file)], cwd=root, env=environment,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                 timeout=timeout, text=True, encoding="utf-8")
+        # These lines are structured and redacted by workday_http.emit().
+        # Forward recovered attempts as well as failed ones. Full JSONL is
+        # written directly to the cloud artifact directory by the child.
+        for line in (result.stderr or "").splitlines():
+            if line.startswith("[WORKDAY_HTTP] "):
+                print(line, file=sys.stderr, flush=True)
         if result.returncode:
             raise RuntimeError(f"Provider subprocess failed: {result.stderr[-1200:]}")
         if output_file.stat().st_size > 64 * 1024 * 1024:
