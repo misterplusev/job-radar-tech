@@ -108,6 +108,25 @@ class WorkdayPolicyTests(unittest.TestCase):
         with http.source_budget(1005):
             client = http.WorkdayHTTP(Mock(), source="test", clock=self.clock)
         self.assertEqual(client.deadline, 1005)
+    def test_explicit_security_challenge_is_not_retried(self):
+        challenged = response(429, headers={"Content-Type":"text/html", "CF-Mitigated":"challenge", "CF-Ray":"proof-ray"})
+        challenged._content = b"<svg><path d='" + b"x"*6000 + b"'/></svg><h1>Security Check</h1><p>Enable JavaScript and cookies to continue</p>"
+        client, send = self.client([challenged])
+        with self.assertRaises(http.WorkdayChallenge):client.request("POST", URL)
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.clock.waits, [])
+        self.assertEqual(self.events[-1]["decision"], "access_challenge")
+        self.assertIn("Enable JavaScript and cookies", self.events[-1]["response_excerpt"])
+        self.assertEqual(self.events[-1]["cf_mitigated"], "challenge")
+        another, transport = self.client([])
+        with self.assertRaises(http.WorkdayDeferred):another.request("POST", URL)
+        transport.assert_not_called()
+    def test_challenge_body_is_detected_when_header_is_absent(self):
+        challenged=response(403,headers={"Content-Type":"text/html"})
+        challenged._content=b"<h1>Security Check</h1><p>Enable JavaScript and cookies to continue</p>"
+        client, send=self.client([challenged])
+        with self.assertRaises(http.WorkdayChallenge):client.request("POST",URL)
+        self.assertEqual(send.call_count,1)
     def test_logs_are_redacted_and_bounded(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
              "ABET_BASE_DIR": directory, "FAKE_SECRET_KEY": "super-secret-value"}), redirect_stderr(io.StringIO()):

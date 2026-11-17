@@ -29,6 +29,12 @@ _LOG_DROPPED = 0
 _LOG_NAME = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + f"-{os.getpid()}.jsonl"
 
 
+class WorkdayChallenge(RuntimeError):
+    """Explicit upstream browser/security challenge; not an ordinary rate-limit retry."""
+    retryable = False
+    failure_kind = "access_challenge"
+
+
 class WorkdayDeferred(RuntimeError):
     """Source remains incomplete; do not publish a partial source or close jobs."""
 
@@ -80,8 +86,9 @@ def _clean(value, limit=320):
     for name, secret in os.environ.items():
         if len(secret) >= 8 and any(k in name.upper() for k in ("TOKEN", "KEY", "SECRET", "PASSWORD", "WEBHOOK")):
             value = value.replace(secret, "[redacted]")
-    value = re.sub(r"(?is)<(script|style)\b.*?</\1>", "", value)
+    value = re.sub(r"(?is)<(script|style|svg)\b.*?</\1>", "", value)
     value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"(?i)Client IP:\s*[0-9a-f:.]+", "Client IP: [redacted]", value)
     value = re.sub(r"https?://[^\s<>]+", "[url]", value)
     value = re.sub(r"(?i)\b(?:bearer\s+\S+|[\w.+-]+@[\w.-]+\.[a-z]{2,})", "[redacted]", value)
     return " ".join(value.split())[:limit]
@@ -207,11 +214,23 @@ class WorkdayHTTP:
                           "cf_ray": _clean(headers.get("CF-Ray", ""), 128),
                           "server": _clean(headers.get("Server", ""), 128),
                           "server_date": _clean(headers.get("Date", ""), 128),
+                          "cf_mitigated": _clean(headers.get("CF-Mitigated", ""), 80),
                           "content_type": _clean(headers.get("Content-Type", ""), 128)}
                 if response is not None and (retry or not 200 <= status < 300):
-                    raw = getattr(response, "content", b"")[:4096]
+                    raw = getattr(response, "content", b"")[:65536]
                     fields.update(response_excerpt=_clean(raw.decode("utf-8", "replace")),
                                   response_prefix_sha256=hashlib.sha256(raw).hexdigest())
+            challenge = str(headers.get("CF-Mitigated", "")).lower() == "challenge"
+            if not challenge and status in (403, 429) and "html" in str(headers.get("Content-Type", "")).lower():
+                readable = _clean(getattr(response, "content", b"")[:65536].decode("utf-8", "replace"), 2000).lower()
+                challenge = "security check" in readable and "enable javascript and cookies" in readable
+            if challenge:
+                with state["lock"]:
+                    state["cooldown"] = max(state["cooldown"], self.clock() + 86400)
+                self.logger({**fields, "decision": "access_challenge", "retryable": False,
+                             "retry_not_before": datetime.fromtimestamp(time.time() + 86400, timezone.utc).isoformat()})
+                raise WorkdayChallenge(f"{host} offset={offset}: upstream security challenge; "
+                                       f"HTTP {status}; CF-Ray={headers.get('CF-Ray', 'unknown')}; no automatic retry")
             if not retry:
                 if not 200 <= status < 300:
                     self.logger({**fields, "decision": "terminal"})
