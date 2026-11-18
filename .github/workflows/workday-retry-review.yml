@@ -1,24 +1,20 @@
-name: workday-repair-regression
-on:
-  workflow_dispatch:
-permissions:
-  contents: read
-concurrency:
-  group: workday-cloud-development
-  cancel-in-progress: false
+name: Read back real job message receipts
+on: workflow_dispatch
+permissions: {contents: read}
 jobs:
-  regression:
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
+  read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
-      - run: pip install -r requirements.txt
-      - name: Isolated retry, challenge, completeness and regression tests
+      - run: pip install requests
+      - name: Compare database receipt with the actual Discord post
         env:
-          PYTHONPATH: runtime/verification/isolation:.
-          STAGING_TEST_NETWORK_OFF: '1'
-        run: |
-          python -m unittest discover -s tests -v
+          MODULE: tech
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOB_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
+        run: python runtime/verification/discord_by_module.py
+      - uses: actions/upload-artifact@v4
+        with: {name: 'discord-tech', path: 'discord-*.json', retention-days: 7}
