@@ -59,6 +59,19 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python run.py render --out out/dashboard.html
+      # One row per run in public.job_system_log: database size, rows and active rows per job table, run-log sizes,
+      # sources that failed in the last 24 hours, jobs waiting for Discord. It cannot fail the run.
+      - name: Log database size and table counts
+        if: ${{ always() }}
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          curl -sS --max-time 60 -X POST "$SUPABASE_URL/rest/v1/rpc/log_job_system" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" -d '{"p_source":"tech"}' | head -c 400
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
