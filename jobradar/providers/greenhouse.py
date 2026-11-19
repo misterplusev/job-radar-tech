@@ -59,7 +59,9 @@ class GreenhouseProvider(Provider):
                 provider_slug=self.slug,
                 run_id=run_id,
                 remote=("remote" in (location or "").lower()) or None,
-                posted_at=j.get("updated_at") or j.get("first_published"),
+                # The date the employer first published the posting. The last-updated time moves on every
+                # employer edit, which showed a wrong posted date and rewrote the stored row each time.
+                posted_at=j.get("first_published") or j.get("updated_at"),
                 scraped_at=now_iso(),
             ))
         return jobs
