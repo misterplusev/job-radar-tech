@@ -6,6 +6,8 @@
 --      The saved change marker is cleared with the text, so if the job is ever posted again the scraper
 --      writes the full row, text included.
 --   2. Run-log rows older than p_log_days (default 90).
+-- What it closes (2026-11-19): a robotics or tech job marked active that no run has seen for 14 days.
+-- Nothing is removed from such a row; it is marked closed.
 -- Windows under 30 days are refused. p_source limits the pass to one scraper; null means all four.
 -- Each scraper's last workflow step calls log_job_system('<scraper>'), which calls this for that scraper
 -- and records what was removed in job_system_log.detail->'retention'.
@@ -36,6 +38,14 @@ begin
   end if;
 
   if p_source is null or p_source = 'robotics' then
+    -- Added 2026-11-19. A job still marked active that no run has seen for 14 days is closed. Every run
+    -- stamps every job it finds, so 14 days unseen means no source reports it any more. On 2026-11-19,
+    -- 1,068 robotics jobs stored under company spellings retired on 2026-10-17 ("Openai", "Figureai",
+    -- "Physicalintelligence", "Standardbots", "Figure") were still marked active. If a source comes back,
+    -- its next run marks the job active again.
+    update public.robotics_jobs set is_active = false, closed_at = now()
+     where is_active and last_seen_at < now() - interval '14 days';
+    get diagnostics n = row_count; r := r || jsonb_build_object('robotics_jobs_closed_unseen', n);
     update public.robotics_jobs j set description = null, source_payload = coalesce(j.source_payload, '{}'::jsonb) - 'content_hash_v2'
      where not j.is_active and j.last_seen_at < cut and j.description is not null and j.description <> ''
        and not exists (select 1 from public.robotics_applications a where a.company = j.company and a.job_url = j.url);
@@ -45,6 +55,9 @@ begin
   end if;
 
   if p_source is null or p_source = 'tech' then
+    update public.tech_jobs set is_active = false, closed_at = now()
+     where is_active and last_seen_at < now() - interval '14 days';
+    get diagnostics n = row_count; r := r || jsonb_build_object('tech_jobs_closed_unseen', n);
     update public.tech_jobs j set description = null, source_payload = coalesce(j.source_payload, '{}'::jsonb) - 'content_hash_v2'
      where not j.is_active and j.last_seen_at < cut and j.description is not null and j.description <> ''
        and not exists (select 1 from public.tech_applications a where a.company = j.company and a.job_url = j.url);
