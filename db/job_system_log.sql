@@ -32,7 +32,8 @@ begin
     'waiting_for_discord', jsonb_build_object(
       'robotics', (select count(*) from public.robotics_job_notifications where state = 'pending'),
       'tech', (select count(*) from public.tech_job_notifications where state = 'pending'),
-      'sportsbook', (select count(*) from public.sportsbook_job_notifications where state = 'pending')),
+      'sportsbook', (select count(*) from public.sportsbook_job_notifications where state = 'pending'),
+      'sports_teams', (select count(*) from public.team_job_notifications where status = 'pending')),
     'retention', coalesce(ret, 'null'::jsonb)
   ) into d;
   insert into public.job_system_log (source, database_bytes, detail) values (left(coalesce(p_source, 'unknown'), 40), b, d);
