@@ -169,12 +169,35 @@ def _rest(url_base: str, table: str) -> str:
 # --------------------------------------------------------------------------- #
 # persistence
 # --------------------------------------------------------------------------- #
+def _get(url: str, **kwargs):
+    """Read from the database, repeating the read after a server error or a dropped connection.
+
+    A read changes nothing, so repeating it is safe. On 2026-11-19 one read answered HTTP 500 while the
+    table was being rewritten (run 44496422818). That single answer ended the run before the 11 jobs
+    already queued for Discord were sent.
+    """
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.get(url, **kwargs)
+            status = getattr(response, "status_code", 200)
+            if not isinstance(status, int) or status < 500 or attempt == 2:
+                return response
+            print(f"[DATABASE] read answered HTTP {status}; attempt {attempt + 1} of 3")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt == 2:
+                raise
+            print(f"[DATABASE] read failed ({type(exc).__name__}); attempt {attempt + 1} of 3")
+        time.sleep(3 * (attempt + 1))
+    return response
+
+
 def fetch_existing_state(url_base: str, key: str, company: str) -> Dict[str, dict]:
     """Known url -> {is_active, hash} for a company (paginated, 1000/page)."""
     state: Dict[str, dict] = {}
     offset = 0
     while True:
-        r = requests.get(
+        r = _get(
             _rest(url_base, TABLE_JOBS),
             headers=_headers(key),
             params={"company": f"eq.{company}",
@@ -448,7 +471,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> int:
     for _page in range(1000):
         if time.monotonic() >= deadline:
             break
-        response = requests.get(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
+        response = _get(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
                                 params={"state": "eq.pending", "id": f"gt.{cursor}",
                                         "order": "id.asc", "limit": 100,
                                         "select": "id,company,job_url,payload"}, timeout=60)
@@ -466,7 +489,7 @@ def notify_new_jobs(new_jobs: List[dict]) -> int:
                 _ack_notifications(url_base, key, [item["id"]], "expired")
                 continue
             # An interrupted queue-before-upsert must never announce an unsaved job.
-            check = requests.get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
+            check = _get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
                                  params={"company": f"eq.{item['company']}",
                                          "url": f"eq.{item['job_url']}",
                                          "select": "id,is_active", "limit": 1}, timeout=30)
@@ -577,7 +600,7 @@ def retire_empty_sources(url_base, key, empty_providers):
     for source, slug in empty_providers:
         # Always refetch page zero because successful retirement removes these rows.
         for _page in range(1000):
-            response = requests.get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
+            response = _get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
                 params={"ats": f"eq.{source}", "source_payload->>provider_slug": f"eq.{slug}",
                         "is_active": "eq.true", "select": "company,url", "order": "id", "limit": 100}, timeout=60)
             response.raise_for_status()
