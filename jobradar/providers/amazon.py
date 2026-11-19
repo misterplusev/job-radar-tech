@@ -81,7 +81,7 @@ class AmazonProvider(Provider):
                         scraped_at=now_iso(),
                     ))
                 total = int(data.get("hits") or 0)
-                offset += 100
+                offset += len(batch)  # a short page must not skip the rows after it
                 if offset >= total:
                     break
                 time.sleep(0.4)

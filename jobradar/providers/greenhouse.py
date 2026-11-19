@@ -38,6 +38,13 @@ class GreenhouseProvider(Provider):
         data = http_get(url).json()
         if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
             raise ValueError("greenhouse returned an invalid posting list")
+        # The board says how many postings it has. A list that does not match is not a complete reading,
+        # and only a complete reading may close the jobs it does not list.
+        meta = data.get("meta")
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if isinstance(total, int) and total != len(data["jobs"]):
+            raise ValueError(f"greenhouse reported {total} postings but listed {len(data['jobs'])}; "
+                             "observation is incomplete")
         company = _board_company(data, self.slug)
         jobs: List[Job] = []
         for j in data.get("jobs", []):
