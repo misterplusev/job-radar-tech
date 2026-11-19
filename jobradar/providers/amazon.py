@@ -6,10 +6,28 @@ Covers Amazon Robotics + Autonomy (FSD-adjacent) postings. Two queries merged:
 from __future__ import annotations
 
 import time
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 
 from ..models import Job, clean_ws, now_iso
 from .base import Provider, http_get
+
+
+def iso_date(text) -> Optional[str]:
+    """Amazon gives the posted date as text ("April  2, 2026"). The publisher reads dates in ISO form only,
+    so this text never counted as a recent posting and no Amazon job was ever sent to Discord
+    (1,187 new Amazon jobs between 2026-11-11 and 2026-11-19, none announced)."""
+    cleaned = " ".join(str(text or "").split())
+    for pattern in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(cleaned, pattern).date().isoformat()
+        except ValueError:
+            continue
+    try:
+        datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    return cleaned
 
 API = "https://www.amazon.jobs/en/search.json?result_limit=100&offset={offset}&base_query={query}"
 QUERIES = ["robotics", "autonomy"]
@@ -46,7 +64,7 @@ class AmazonProvider(Provider):
                         continue
                     loc = clean_ws(j.get("normalized_location") or j.get("location") or "")
                     desc = clean_ws(j.get("description") or "")[:3000]
-                    posted = j.get("posted_date")
+                    posted = iso_date(j.get("posted_date"))
                     jobs.append(Job(
                         company="Amazon",
                         title=title,

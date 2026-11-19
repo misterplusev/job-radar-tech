@@ -178,7 +178,7 @@ def fetch_existing_state(url_base: str, key: str, company: str) -> Dict[str, dic
             _rest(url_base, TABLE_JOBS),
             headers=_headers(key),
             params={"company": f"eq.{company}",
-                    "select": f"url,is_active,{HASH_KEY}:source_payload->>{HASH_KEY}",
+                    "select": f"url,is_active,posted_at,{HASH_KEY}:source_payload->>{HASH_KEY}",
                     "limit": 1000, "offset": offset},
             timeout=120,
         )
@@ -189,7 +189,8 @@ def fetch_existing_state(url_base: str, key: str, company: str) -> Dict[str, dic
         for row in rows:
             if row.get("url"):
                 state[row["url"]] = {"is_active": bool(row.get("is_active", True)),
-                                     "hash": row.get(HASH_KEY) or None}
+                                     "hash": row.get(HASH_KEY) or None,
+                                     "posted_at": row.get("posted_at") or None}
         if len(rows) < 1000:
             break
         offset += 1000
@@ -593,6 +594,20 @@ def retire_empty_sources(url_base, key, empty_providers):
     return total
 
 
+def keep_stored_posted_at(row: dict, stored: Optional[dict]) -> dict:
+    """Never replace a stored posted date with nothing, and never move a Workday date.
+
+    Every stored row is written with its posted date on every run. A source that gives no date this time
+    (Workday shows "Posted 30+ Days Ago" once a job is a month old) would blank the date already stored.
+    Workday's date is counted back from the day the listing was read, so the same job read on another day
+    could land one day off; the first stored date is kept so the row is not rewritten for that.
+    """
+    known = (stored or {}).get("posted_at")
+    if known and (not row.get("posted_at") or row.get("ats") == "workday"):
+        row["posted_at"] = known
+    return row
+
+
 def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
     """Full publish cycle for one scrape run: upsert -> deactivate -> announce."""
     url_base, key = supabase_env()
@@ -613,6 +628,7 @@ def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
             if row["url"] in seen:
                 continue
             seen.add(row["url"])
+            keep_stored_posted_at(row, existing.get(row["url"]))
             row["source_payload"][HASH_KEY] = _content_hash(row)
             rows.append(row)
         new_rows = [r for r in rows if r["url"] not in existing_urls]

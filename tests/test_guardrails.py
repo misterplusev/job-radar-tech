@@ -90,7 +90,7 @@ class CommonSenderFile(unittest.TestCase):
     send function sports teams uses. misterplusev/job-radar and misterplusev/job-radar-tech carry
     byte-identical copies. If you change it, change it in BOTH repositories and update this hash
     in BOTH guardrail files in the same commits; otherwise this test stops every scrape."""
-    COMMON_SENDER_SHA256 = 'bd2e09c861ee18fdd3b4f1b180e6c1a8049148f9333c0861a04b62c2bb05e7da'
+    COMMON_SENDER_SHA256 = '9da8db4884e1a7bc5f027b722ba3092e7f88e28996f41b9d7de6f452c6b760ff'
 
     def test_sender_file_is_the_pinned_common_one(self):
         data = (ROOT / 'jobradar' / 'publish.py').read_bytes().replace(b'\r\n', b'\n')
