@@ -10,6 +10,7 @@ import tempfile
 
 def fetch_provider(provider, run_id: str, timeout: int = 180):
     from .models import Job
+    from .observations import PartialBoard
     root = Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="jobradar-fetch-") as folder:
         request_file, output_file = Path(folder)/"request.json", Path(folder)/"jobs.json"
@@ -34,7 +35,11 @@ def fetch_provider(provider, run_id: str, timeout: int = 180):
             raise RuntimeError(f"Provider subprocess failed: {result.stderr[-1200:]}")
         if output_file.stat().st_size > 64 * 1024 * 1024:
             raise RuntimeError("Provider output exceeds 64 MiB safety limit")
-        return [Job(**row) for row in json.loads(output_file.read_text(encoding="utf-8"))]
+        payload = json.loads(output_file.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and payload.get("observation") == "partial":
+            raise PartialBoard([Job(**r) for r in payload["jobs"]],
+                               [Job(**r) for r in payload["untitled"]], payload["rejected"])
+        return [Job(**row) for row in payload]
 
 
 def main():
@@ -46,8 +51,13 @@ def main():
     providers = build_providers({request["source"]: [dict(slug=request["slug"], **request["options"])]})
     if len(providers) != 1:
         raise ValueError("Expected one configured provider")
-    jobs = providers[0].fetch(request["run_id"])
-    Path(sys.argv[2]).write_text(json.dumps([job.to_row() for job in jobs]), encoding="utf-8")
+    from .observations import PartialBoard
+    try:
+        payload = [job.to_row() for job in providers[0].fetch(request["run_id"])]
+    except PartialBoard as partial:
+        payload = {"observation": "partial", "jobs": [j.to_row() for j in partial.jobs],
+                   "untitled": [j.to_row() for j in partial.untitled], "rejected": partial.rejected}
+    Path(sys.argv[2]).write_text(json.dumps(payload), encoding="utf-8")
 
 
 if __name__ == "__main__":

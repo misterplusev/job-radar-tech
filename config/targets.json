@@ -1,1 +1,24 @@
-{"_note": "Tech company slugs by ATS source. Verified live 2026-10-09 via boards-api probes (greenhouse). Meta, TikTok, X, GitHub, NVIDIA, Netflix, Uber run custom/Akamai-protected stacks (need stealth/proxy tooling - not included).", "greenhouse": ["cloudflare", "stripe", "databricks", "coinbase", "mongodb", "figma", "airbnb", "robinhood", "twilio", "vercel", "instacart", "gusto", "dropbox"]}
+{
+ "_note": "Tech company slugs by ATS source. Verified live 2026-10-09 via boards-api probes (greenhouse). Meta, TikTok, X, GitHub, NVIDIA, Netflix, Uber run custom/Akamai-protected stacks (need stealth/proxy tooling - not included).",
+ "greenhouse": [
+  "cloudflare",
+  "stripe",
+  "databricks",
+  "coinbase",
+  "mongodb",
+  "figma",
+  "airbnb",
+  "robinhood",
+  "twilio",
+  "vercel",
+  "instacart",
+  "gusto",
+  "dropbox",
+  "anthropic"
+ ],
+ "ashby": [
+  "ramp",
+  "openai"
+ ],
+ "_note_2026_11_19": "Tech companies only. anthropic (greenhouse) and ramp, openai (ashby) moved here from the robotics scraper (job-radar/config/targets.json) on 2026-11-19, with their stored rows. The six companies that were in both lists (stripe, databricks, coinbase, figma, airbnb, robinhood) are now only here."
+}

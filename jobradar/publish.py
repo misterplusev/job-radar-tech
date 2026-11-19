@@ -647,18 +647,90 @@ def keep_stored_posted_at(row: dict, stored: Optional[dict]) -> dict:
     return row
 
 
+def adopt_renamed_rows(url_base: str, key: str, company: str, sources, existing: Dict[str, dict],
+                       close_twins: bool = True) -> int:
+    """Rows this source stored under another company name become rows of the current name.
+
+    A stored posting is found by (company, url). The company name comes from the employer's own board,
+    or from our name map, and either can change ("Openai" became "OpenAI" on 2026-10-17). Every posting
+    of that board then looked new: it was stored a second time and queued for Discord again, and the rows
+    under the old name were never visited again (1,068 stayed open for 33 days). Finding the rows by the
+    source that wrote them (ats + provider_slug) keeps one row per posting whatever the name is.
+
+    `existing` (url -> state under the current name) is extended with the adopted rows. Returns rows renamed.
+    """
+    renamed = 0
+    headers = dict(_headers(key), Prefer="return=representation")
+    for source, slug in sorted(sources):
+        others: Dict[str, Dict[str, dict]] = {}
+        offset = 0
+        while True:
+            r = _get(_rest(url_base, TABLE_JOBS), headers=_headers(key),
+                     params={"ats": f"eq.{source}", "source_payload->>provider_slug": f"eq.{slug}",
+                             "company": f"neq.{company}",
+                             "select": f"company,url,is_active,posted_at,{HASH_KEY}:source_payload->>{HASH_KEY}",
+                             "order": "id", "limit": 1000, "offset": offset}, timeout=120)
+            r.raise_for_status()
+            rows = r.json()
+            for row in rows:
+                if row.get("url") and row.get("company"):
+                    others.setdefault(row["company"], {})[row["url"]] = row
+            if len(rows) < 1000:
+                break
+            offset += 1000
+        if len(others) > 3:
+            print(f"[PUBLISH] {source}:{slug} has rows under {len(others)} other company names; left alone")
+            continue
+        for old, rows in others.items():
+            # A posting already stored under the current name too: the old copy is closed, not renamed.
+            twins = {u for u, row in rows.items() if u in existing and row.get("is_active")}
+            move = {u for u in rows if u not in existing}
+            moved = 0
+            for batch in _deactivation_batches(url_base, old, move):
+                response = requests.patch(
+                    _rest(url_base, TABLE_JOBS), headers=headers,
+                    params={"company": f"eq.{old}", "select": "id",
+                            "url": "in.(" + ",".join(json.dumps(u) for u in batch) + ")"},
+                    json={"company": company}, timeout=120)
+                response.raise_for_status()
+                moved += len(response.json())
+            for u in move:
+                existing[u] = {"is_active": bool(rows[u].get("is_active", True)),
+                               "hash": rows[u].get(HASH_KEY) or None,
+                               "posted_at": rows[u].get("posted_at") or None}
+            closed = deactivate(url_base, key, old, twins) if (twins and close_twins) else 0
+            renamed += moved
+            if move or twins:
+                print(f"[PUBLISH] {source}:{slug}: {moved} rows stored as {old!r} are now {company!r}; "
+                      f"{closed} older copies closed")
+    return renamed
+
+
 def publish(jobs, *, allow_deactivate: bool = True, empty_providers=()) -> dict:
     """Full publish cycle for one scrape run: upsert -> deactivate -> announce."""
     url_base, key = supabase_env()
     totals = {"upserted": 0, "deactivated": 0, "queued_candidates": 0, "delivered": 0,
-              "written_new": 0, "written_changed": 0, "written_backfill": 0, "touched": 0}
+              "written_new": 0, "written_changed": 0, "written_backfill": 0, "touched": 0, "renamed": 0}
     backfill_budget = BACKFILL_PER_RUN
     grouped: Dict[str, list] = {}
+    companies_of: Dict[tuple, set] = {}
     for job in jobs:
         grouped.setdefault(job.company, []).append(job)
+        companies_of.setdefault((job.source, job.provider_slug), set()).add(job.company)
 
     for company, company_jobs in grouped.items():
         existing = fetch_existing_state(url_base, key, company)
+        # Only a source that reports one company can have had its rows renamed.
+        own_sources = {(j.source, j.provider_slug) for j in company_jobs if j.source and j.provider_slug}
+        own_sources = {s for s in own_sources if companies_of[s] == {company}}
+        # The look-up by source reads the whole table (about 3 seconds on robotics_jobs, measured
+        # 2026-11-19), so it runs only when the board looks renamed: nothing stored under this name,
+        # or more than a fifth of the listed postings unknown.
+        listed_urls = {j.url for j in company_jobs}
+        unknown = listed_urls - set(existing)
+        if own_sources and (not existing or len(unknown) > max(5, len(listed_urls) // 5)):
+            totals["renamed"] += adopt_renamed_rows(url_base, key, company, own_sources, existing,
+                                                    close_twins=allow_deactivate)
         existing_urls = set(existing)
         seen: Set[str] = set()
         rows: List[dict] = []

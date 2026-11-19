@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import settings  # noqa: E402
 from jobradar.diagnostics import safe_error
 from jobradar.models import now_iso  # noqa: E402
+from jobradar.observations import PartialBoard, resolve_ashby_titles
 from jobradar.providers import build_providers  # noqa: E402
 from jobradar.storage import get_storage  # noqa: E402
 
@@ -46,6 +47,9 @@ def _scrape_all() -> list:
                 jobs = future.result(timeout=PROVIDER_TIMEOUT)
             print(f"  [{p.source}:{p.provider_slug}] {len(jobs)} jobs")
             all_jobs.extend(jobs)
+        except PartialBoard as partial:
+            all_jobs.extend(partial.jobs)
+            print(f"  [{p.source}:{p.provider_slug}] PARTIAL: {partial}")
         except concurrent.futures.TimeoutError:
             print(f"  [{p.source}:{p.provider_slug}] TIMEOUT after {PROVIDER_TIMEOUT}s")
         except Exception as e:  # noqa: BLE001
@@ -84,12 +88,25 @@ def _ingest_supabase() -> int:
             started = time.monotonic()
             receipt = {"provider": label}
             try:
-                jobs = fetch_provider(provider, _run_id(label),
-                                      timeout=300 if provider.source == "amazon" else 180)
+                unresolved = 0
+                try:
+                    jobs = fetch_provider(provider, _run_id(label),
+                                          timeout=300 if provider.source == "amazon" else 180)
+                except PartialBoard as partial:
+                    jobs, retained, unresolved = resolve_ashby_titles(partial, url_base, key)
+                    receipt.update(source_rows=len(partial.jobs) + len(partial.untitled) + partial.rejected,
+                                   retained_title_urls=retained, unresolved_rows=unresolved,
+                                   untitled_at_source=len(partial.untitled))
+                    receipt["detail_note"] = (f"{len(retained)} exact same-source stored titles retained; "
+                                              f"{unresolved} unresolved records")
                 all_jobs.extend(jobs)
-                if not jobs:
+                if not jobs and not unresolved:
                     empty_providers.append((provider.source, provider.provider_slug))
-                receipt.update(status="success", job_count=len(jobs), complete=True)
+                if unresolved:
+                    failures.append(label)
+                    receipt["error"] = receipt["detail_note"]
+                receipt.update(status="partial" if unresolved else "success", job_count=len(jobs),
+                               complete=not unresolved)
                 print(f"  [{label}] {len(jobs)} jobs", flush=True)
             except Exception as exc:
                 failures.append(label)
@@ -99,7 +116,7 @@ def _ingest_supabase() -> int:
             manifest["providers"].append(receipt)
             try:
                 publish.record_run(url_base, key, label, receipt["status"], receipt["job_count"],
-                                   receipt.get("error", ""), trigger=manifest["trigger"])
+                                   receipt.get("error") or receipt.get("detail_note", ""), trigger=manifest["trigger"])
             except Exception as exc:
                 failures.append(f"telemetry:{label}")
                 receipt["telemetry_error"] = type(exc).__name__
@@ -140,6 +157,12 @@ def _ingest_sqlite() -> int:
             store.log_run({"run_id": rid, "source": p.source, "provider_slug": p.provider_slug,
                            "status": "success", "job_count": len(jobs), "started_at": started})
             print(f"  [{p.source}:{p.provider_slug}] {len(jobs)} jobs")
+        except PartialBoard as partial:
+            store.upsert_jobs(partial.jobs)
+            total += len(partial.jobs)
+            store.log_run({"run_id": rid, "source": p.source, "provider_slug": p.provider_slug,
+                           "status":"partial","job_count":len(partial.jobs),"started_at":started,
+                           "error_summary":str(partial)})
         except Exception as e:  # noqa: BLE001
             store.log_run({"run_id": rid, "source": p.source, "provider_slug": p.provider_slug,
                            "status": "error", "error_summary": str(e), "started_at": started})

@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 
 from ..models import Job, clean_ws, now_iso
 from .base import Provider, http_get
+from ..observations import PartialBoard
+from .names import board_company
 
 API = "https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
 
@@ -25,22 +27,41 @@ def _strip(raw: str) -> str:
 class AshbyProvider(Provider):
     source = "ashby"
 
+    def __init__(self, slug: str, content: bool = True):
+        super().__init__(slug)
+        self.content = content
+
     def fetch(self, run_id: str) -> List[Job]:
         data = http_get(API.format(slug=self.slug)).json()
         if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
             raise ValueError("ashby returned an invalid posting list")
-        company = clean_ws(data.get("name")) or self.slug.replace("-", " ").title()
+        company = board_company(self.slug, data.get("name"))
         jobs: List[Job] = []
-        for p in data.get("jobs", []):
+        untitled, rejected, seen = [], 0, set()
+        for p in data["jobs"]:
+            if not isinstance(p, dict):
+                rejected += 1
+                continue
             title = clean_ws(p.get("title"))
             url = p.get("jobUrl") or p.get("applyUrl") or ""
-            if not title or not url:
-                raise ValueError("Posting missing title or URL; observation is incomplete")
+            if not url or url in seen:
+                rejected += 1
+                continue
+            seen.add(url)
             loc = clean_ws(p.get("location") or p.get("locationName"))
-            desc = _strip(p.get("descriptionHtml") or "") or clean_ws(p.get("descriptionPlain"))
-            jobs.append(Job(company=company, title=title, url=url, location=loc or None,
-                            description=desc, description_raw=p.get("descriptionHtml") or "",
+            if self.content:
+                desc = _strip(p.get("descriptionHtml") or "") or clean_ws(p.get("descriptionPlain"))
+                raw = p.get("descriptionHtml") or ""
+            else:
+                desc, raw = "", ""
+            group = jobs if title else untitled
+            group.append(Job(company=company, title=title, url=url, location=loc or None,
+                            description=desc, description_raw=raw,
                             description_clean=desc, source=self.source, provider_slug=self.slug,
                             run_id=run_id, remote=bool(p.get("isRemote")) or ("remote" in (loc or "").lower()) or None,
+                            # Ashby's own published time. Without it a new job is never sent to Discord.
+                            posted_at=p.get("publishedAt") or None,
                             scraped_at=now_iso()))
+        if untitled or rejected:
+            raise PartialBoard(jobs, untitled, rejected)
         return jobs
