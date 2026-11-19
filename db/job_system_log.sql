@@ -9,7 +9,11 @@ alter table public.job_system_log enable row level security;
 create index if not exists job_system_log_logged_at on public.job_system_log (logged_at desc);
 
 create or replace function public.log_job_system(p_source text)
-returns jsonb language plpgsql security definer set search_path = public, pg_catalog as $fn$
+returns jsonb language plpgsql security definer set search_path = public, pg_catalog
+-- The REST API cancels a call after 8 seconds. On 2026-11-19 two log calls were cancelled while another scraper
+-- was rewriting 11,006 rows. A setting on the function itself lifts the limit for this call only (proven with a
+-- 10-second probe function: cancelled without the setting, HTTP 200 with it).
+set statement_timeout = '50s' as $fn$
 declare d jsonb; b bigint; ret jsonb;
 begin
   b := pg_database_size(current_database());
