@@ -448,9 +448,25 @@ def _ack_notifications(url_base: str, key: str, ids: List[int], state: str,
         if MODULE["record_destination"]:
             payload.update(discord_channel_id=LAST_DESTINATION.get("channel_id"),
                            discord_webhook_id=LAST_DESTINATION.get("webhook_id"))
-    response = requests.patch(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
-                              params={"id": "in.(" + ",".join(str(i) for i in ids) + ")",
-                                      "state": "eq.pending"}, json=payload, timeout=60)
+    # Discord has already accepted the message when this runs. If this write fails, the next run sends the same
+    # jobs again (Codex review T04, 2026-11-19). The write only touches rows still "pending", so repeating it is
+    # safe; it is tried three times before the run fails.
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.patch(_rest(url_base, TABLE_NOTIFICATIONS), headers=_headers(key),
+                                      params={"id": "in.(" + ",".join(str(i) for i in ids) + ")",
+                                              "state": "eq.pending"}, json=payload, timeout=60)
+            status = getattr(response, "status_code", 200)
+            if not isinstance(status, int) or status < 500:
+                break
+            print(f"[DISCORD] recording the send answered HTTP {status}; attempt {attempt + 1} of 3")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt == 2:
+                raise
+            print(f"[DISCORD] recording the send failed ({type(exc).__name__}); attempt {attempt + 1} of 3")
+        if attempt < 2:
+            time.sleep(3 * (attempt + 1))
     response.raise_for_status()
 
 

@@ -63,15 +63,24 @@ jobs:
       # sources that failed in the last 24 hours, jobs waiting for Discord. It cannot fail the run.
       - name: Log database size and table counts
         if: ${{ always() }}
-        continue-on-error: true
         working-directory: ${{ github.workspace }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        # This call writes the system log row and runs the retention pass. Until 2026-11-19 the step could
+        # not fail (continue-on-error, output piped to head), so two cancelled calls went unseen in green runs.
+        # It now tries three times and fails the job unless the reply says the row was written.
         run: |
-          curl -sS --max-time 60 -X POST "$SUPABASE_URL/rest/v1/rpc/log_job_system" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Content-Type: application/json" -d '{"p_source":"tech"}' | head -c 400
+          for attempt in 1 2 3; do
+            code=$(curl -sS --max-time 60 -o log_reply.json -w '%{http_code}' -X POST "$SUPABASE_URL/rest/v1/rpc/log_job_system" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" -d '{"p_source":"tech"}' || true)
+            head -c 400 log_reply.json 2>/dev/null; echo
+            if [ "$code" = "200" ] && grep -q '"logged" *: *true' log_reply.json && ! grep -q '"error"' log_reply.json; then exit 0; fi
+            echo "system log call attempt $attempt failed (HTTP $code)"; sleep 10
+          done
+          echo "::error::The system log row was not written, or the retention pass reported an error"
+          exit 1
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:

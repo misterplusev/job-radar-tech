@@ -159,6 +159,13 @@ def cmd_ingest(args) -> int:
             print(f"[FATAL] {safe_error(e)}")
             notify_failure(safe_error(e))
             return 1
+    # Without the database settings nothing reaches the database, and the local path returns 0 even after
+    # source errors, so a scheduled run with a missing secret used to finish green having stored nothing.
+    import os as _os
+    if _os.environ.get("JOBRADAR_ALLOW_SQLITE", "").strip() != "1":
+        print("[FATAL] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing; this run would store nothing in the "
+              "database. Set JOBRADAR_ALLOW_SQLITE=1 to use the local development store on purpose.")
+        return 1
     return _ingest_sqlite()
 
 
